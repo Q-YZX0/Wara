@@ -1,0 +1,246 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Links descubiertos en la red P2P
+model Link {
+  id          String   @id @default(cuid())
+  url         String
+  title       String?
+  
+  // Media association
+  waraId      String   // El ID Soberano (Hash)
+  source      String   @default("tmdb")
+  sourceId    String   // Previously tmdbId
+  mediaType   String   
+  season      Int?     
+  episode     Int?     
+  
+  status      String   @default("active")
+  contentHash String?  // El Hash del contenido (original)
+  waraMetadata String? 
+  
+  // Quien lo subiÃ³ (opcional, solo si tiene wallet conectada)
+  uploaderWallet String?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  // Reputation (basado en verificaciÃ³n de la red)
+  trustScore  Int      @default(0)
+  verifiedCount Int    @default(0)  // CuÃ¡ntos nodos lo verificaron
+  
+  upvotes     Int      @default(0)
+  downvotes   Int      @default(0)
+
+  votes       LinkVote[]
+}
+
+// VotaciÃ³n de links (verificaciÃ³n comunitaria)
+model LinkVote {
+  id           String   @id @default(cuid())
+  linkId       String
+  link         Link     @relation(fields: [linkId], references: [id], onDelete: Cascade)
+  
+  voterWallet  String   // Wallet address del votante
+  value        Int      // 1 = Upvote (funciona), -1 = Downvote (fake/roto)
+  status       String   @default("pending") // "pending", "claimed"
+  
+  createdAt    DateTime @default(now())
+  
+  @@unique([linkId, voterWallet]) // Un voto por wallet por link
+}
+
+// Nodos de la red
+model WaraNode {
+  id          String   @id
+  endpoint    String
+  lastSeen    DateTime @default(now())
+  capacity    Int      @default(0)
+  load        Int      @default(0)
+  contentIndex String? // JSON
+  
+  // Wallet del operador del nodo (para recompensas)
+  walletAddress String?
+}
+
+// Sesiones de visualizaciÃ³n (para economÃ­a)
+model ViewSession {
+  id        String   @id @default(cuid())
+  
+  // Viewer (anÃ³nimo o con wallet)
+  viewerWallet  String?
+  viewerIp      String?
+  
+  // QuÃ© vio (Ahora apunta al waraId)
+  waraId    String
+  sourceId  String   // Previously mediaId/tmdbId
+  linkId    String   // Link especÃ­fico usado
+  
+  // QuiÃ©n lo hosteÃ³ (beneficiario)
+  hostNodeId String
+  hostWallet String?
+  
+  // EconomÃ­a
+  adWatched Boolean  @default(false)
+  reward    Float    @default(0.0) // Tokens ganados
+  
+  createdAt DateTime @default(now())
+}
+
+// Metadata de pelÃ­culas/series (cachÃ© de TMDB)
+model Media {
+  waraId      String   @id // El Hash Soberano (Source + ExternalID)
+  source      String   @default("tmdb")
+  sourceId    String   
+  
+  imdbId      String?
+  type        String   // 'movie' | 'tv'
+  title       String
+  genre       String?
+  overview    String?  
+  posterPath  String?
+  backdropPath String?
+  releaseDate String?
+  
+  extendedInfo String? // JSON: { credits, videos, similar }
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  status      String   @default("approved") // 'approved' | 'pending_dao' | 'rejected'
+  
+  // Popularidad en la red
+  requestCount Int      @default(0)
+  linkCount    Int      @default(0)  // CuÃ¡ntos links existen
+  
+  // Governance (DAO)
+  upvotes      Int      @default(0)
+  downvotes    Int      @default(0)
+  votes        MediaVote[]
+
+  @@unique([source, sourceId])
+}
+
+// Votos de Gobernanza (Propuestas de contenido)
+model MediaVote {
+  id           String   @id @default(cuid())
+  
+  mediaWaraId  String
+  media        Media    @relation(fields: [mediaWaraId], references: [waraId], onDelete: Cascade)
+  
+  voterWallet  String   // Wallet address
+  value        Int      // 1 = Yes, -1 = No
+  
+  // Security
+  signature    String   
+  nonce        String
+  timestamp    BigInt
+  
+  createdAt    DateTime @default(now())
+  
+  @@unique([mediaWaraId, voterWallet])
+}
+
+// Peers conocidos (otros clientes Muggi)
+model Peer {
+  id        String   @id @default(cuid())
+  url       String   @unique
+  name      String?
+  lastSeen  DateTime @default(now())
+  trustScore Int     @default(0)
+  
+  createdAt DateTime @default(now())
+}
+
+// Mis Nodos (configurados desde Muggi)
+model MyNode {
+  id          String   @id @default(cuid())
+  name        String   // "Mi Nodo Casa", "Servidor VPS"
+  url         String   @unique // http://192.168.1.50:21746
+  adminKey    String   // Para autenticarse con el nodo
+  
+  // Configuracion
+  trackers    String?  // JSON array de URLs de trackers
+  isActive    Boolean  @default(true)
+  isLocal     Boolean  @default(false) // true si es localhost
+  
+  // Stats
+  lastSeen    DateTime @default(now())
+  contentCount Int     @default(0)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Progreso de reproducciÃ³n
+model PlaybackProgress {
+  id          String   @id @default(cuid())
+  
+  // Identificadores del contenido (Preferimos WaraID)
+  waraId      String   @default("legacy")
+  sourceId    String?
+  
+  season      Int      @default(0) // 0 para pelÃ­culas
+  episode     Int      @default(0) // 0 para pelÃ­culas
+  viewerWallet String    @default("guest") // Wallet address o "guest"
+  
+  // Estado
+  currentTime Float    // Segundos
+  duration    Float
+    watchedCount Int      @default(0)    
+  
+  updatedAt   DateTime @updatedAt
+  
+  @@unique([waraId, season, episode, viewerWallet]) // Un registro por contenido por wallet
+}
+
+// Perfil Local (Managed Wallet)
+model LocalProfile {
+  id              String   @id @default(cuid())
+  username        String   @unique
+  passwordHash    String   // Para desbloquear
+  
+  // Wallet Interna
+  encryptedPrivateKey String // AES Encrypted
+  walletAddress       String @unique
+
+  // Preferencias
+  preferredLanguage   String   @default("es")
+ 
+  // Remote Nodes
+  remoteNodes     RemoteNode[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Remote Nodes (Per User, Encrypted)
+model RemoteNode {
+  id              String   @id @default(cuid())
+  userId          String
+  url             String
+  encryptedKey    String?
+  name            String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user            LocalProfile @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id             String   @id @default(cuid())
+  email          String   @unique
+  walletAddress  String?
+  pendingRewards Float    @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
