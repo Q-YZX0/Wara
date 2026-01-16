@@ -46,9 +46,9 @@ Deep dive into the architecture, economy, and internal logic of Wara:
 The easiest way to set up a WaraNode is using our interactive deployment script:
 
 ```bash
-cd wara-node
-chmod +x deploy_node.sh
-./deploy_node.sh
+cd wara
+chmod +x setup.sh
+./setup.sh
 ```
 
 The script will guide you through:
