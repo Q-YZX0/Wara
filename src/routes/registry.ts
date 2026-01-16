@@ -108,28 +108,26 @@ export const setupRegistryRoutes = (app: Express, node: WaraNode) => {
     app.get('/api/registry/registration-fee', async (req: Request, res: Response) => {
         try {
             const baseFee = await node.registryContract.registrationFee();
-
-            // Calculation logic: 365 days of sentinel (IP updates) + 40% extra
-            // IP Update estimation: ~50,000 gas per update
-            const dailyGasBudget = BigInt(50000);
-            const yearlyGasBudget = dailyGasBudget * BigInt(365);
-
-            // Get current gas price
             const feeData = await node.provider.getFeeData();
-            const gasPrice = feeData.gasPrice || BigInt(1000000000); // Fallback to 1 gwei
 
+            // Prefer maxFeePerGas (EIP-1559) or gasPrice, fallback to 2 Gwei
+            const gasPrice = feeData.maxFeePerGas || feeData.gasPrice || BigInt(2000000000);
+
+            // 2 updates per day for 365 days
+            const dailyGasBudget = BigInt(50000 * 2);
+            const yearlyGasBudget = dailyGasBudget * BigInt(365);
             const sentinelBudget = yearlyGasBudget * gasPrice;
 
-            // Fee calculation: Total = SentinelBudget / 0.6
-            let calculatedFee = (sentinelBudget * BigInt(10)) / BigInt(6);
+            // Fee calculation: Total = SentinelBudget / 0.9 (Split 10/90)
+            let calculatedFee = (sentinelBudget * BigInt(10)) / BigInt(9);
 
-            // Ensure we never go below the contract's minimum fee
             if (calculatedFee < baseFee) calculatedFee = baseFee;
 
             res.json({
                 fee: calculatedFee.toString(),
                 displayFee: ethers.formatEther(calculatedFee),
-                baseFee: baseFee.toString()
+                baseFee: baseFee.toString(),
+                gasPriceEstimate: ethers.formatUnits(gasPrice, 'gwei')
             });
         } catch (e) {
             console.error("[Web3 Error]", e);
