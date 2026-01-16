@@ -17,6 +17,7 @@ import {
     AD_MANAGER_ADDRESS, AD_MANAGER_ABI,
     MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI
 } from './contracts';
+import { RPCManager } from './rpc-manager';
 import { getMediaMetadata } from './tmdb';
 import { setupAdsRoutes } from './routes/ads';
 import { setupAuthRoutes } from './routes/auth';
@@ -129,6 +130,7 @@ export class WaraNode {
     public nodeName: string | null = null; // Nombre registrado en blockchain (ej: "salsa")
     public nodeSigner: ethers.Wallet | null = null; // Identidad delegada para firmar gossip
     public nodeOwner: string | null = null; // Wallet del operador (registrador)
+    public rpcManager: RPCManager;
     public provider: ethers.JsonRpcProvider;
     public registryContract: ethers.Contract;
     public mediaRegistry: ethers.Contract;
@@ -156,8 +158,9 @@ export class WaraNode {
         });
 
         // Blockchain Setup
-        const rpcUrl = process.env.RPC_URL;
-        this.provider = new ethers.JsonRpcProvider(rpcUrl);
+        const rpcUrl = process.env.RPC_URL || 'https://rpc2.sepolia.org';
+        this.rpcManager = new RPCManager(rpcUrl);
+        this.provider = this.rpcManager.getProvider();
 
         // Initialize contracts (Read-Only first, connected to signer later)
         this.registryContract = new ethers.Contract(NODE_REGISTRY_ADDRESS, NODE_REGISTRY_ABI, this.provider);
@@ -767,9 +770,13 @@ export class WaraNode {
                             // Query full node info to get nodeAddress
                             let nodeAddress = undefined;
                             try {
-                                const nodeInfo = await this.registryContract.getNode(name);
-                                if (nodeInfo && nodeInfo.nodeAddress) {
-                                    nodeAddress = nodeInfo.nodeAddress;
+                                // Use failover for registry check
+                                const onChainNode = await this.rpcManager.callWithFailover(async (provider) => {
+                                    const contract = this.registryContract.connect(provider) as any;
+                                    return await contract.getNode(name.replace('.wara', '')); // Query for the discovered peer 'name'
+                                });
+                                if (onChainNode && onChainNode.nodeAddress) {
+                                    nodeAddress = onChainNode.nodeAddress;
                                 }
                             } catch (e) {
                                 console.warn(`[Sentinel] Could not fetch nodeAddress for ${name}`);
@@ -1394,8 +1401,11 @@ export class WaraNode {
 
                 // Check on-chain IP
                 if (!this.nodeName) return; // Skip if no name assigned
-                const cleanName = this.nodeName.replace('.muggi', '');
-                const onChainNode = await this.registryContract.getNode(cleanName);
+                const cleanName = this.nodeName.replace('.muggi', '').replace('.wara', '');
+                const onChainNode = await this.rpcManager.callWithFailover(async (provider) => {
+                    const contract = this.registryContract.connect(provider) as any;
+                    return await contract.getNode(cleanName);
+                });
 
                 // ABI updated: [operator, nodeAddress, expiresAt, active, currentIP]
                 const onChainIP = onChainNode[4] || onChainNode.currentIP;
@@ -1428,7 +1438,7 @@ export class WaraNode {
             }
         };
 
-        setInterval(checkIP, 30 * 60 * 1000); // 30 mins
+        setInterval(checkIP, 4 * 60 * 60 * 1000); // 4 hours
         checkIP(); // Initial check
     }
 
@@ -1450,7 +1460,9 @@ export class WaraNode {
 
         const poll = async () => {
             try {
-                const currentBlock = await this.provider.getBlockNumber();
+                const currentBlock = await this.rpcManager.callWithFailover(async (provider) => {
+                    return await provider.getBlockNumber();
+                });
                 const fromBlock = this.lastSyncedBlock > 0 ? this.lastSyncedBlock + 1 : 0;
 
                 if (fromBlock > currentBlock) return;
@@ -1504,7 +1516,7 @@ export class WaraNode {
 
         // Initialize polling loop if not already started
         if (!this.chainSyncInterval) {
-            this.chainSyncInterval = setInterval(poll, 30000); // Poll every 30s
+            this.chainSyncInterval = setInterval(poll, 6 * 60 * 60 * 1000); // Poll every 6 hours
             poll(); // Immediate first run
         }
 

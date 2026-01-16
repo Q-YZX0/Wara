@@ -37,6 +37,7 @@ Deep dive into the architecture, economy, and internal logic of Wara:
 -   **[Ecosystem Roles & Identity](docs/architecture-roles.md)**: Node vs. User wallets, Admin keys, and Security modes.
 -   **[Registration & Sentinel System](docs/registration-sentinel.md)**: Blockchain registration, 10/90 fee split, and gas refills.
 -   **[Economy & Governance](docs/economy-governance.md)**: Gasless operations, Reward systems, and DAO content approval.
+-   **[RPC Infrastructure](docs/rpc-independence.md)**: How to host your own Ethereum node and move away from centralized providers.
 
 ---
 

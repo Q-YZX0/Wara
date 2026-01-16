@@ -108,8 +108,8 @@ export class AdReplicator {
             }
         };
 
-        console.log('[AdReplicator] Polling for CampaignCreated events...');
-        this.pollInterval = setInterval(poll, 60000); // Poll every minute
+        console.log('[AdReplicator] Polling for CampaignCreated events every 2 hours...');
+        this.pollInterval = setInterval(poll, 2 * 60 * 60 * 1000); // Poll every 2 hours
         poll();
 
         // Replicate existing campaigns on startup (REVERSE ORDER - Newest first)
@@ -127,8 +127,8 @@ export class AdReplicator {
             const total = Number(nextId);
             console.log(`[AdReplicator] Checking existing campaigns from #${total - 1} down to #${START_CAMPAIGN_ID}...`);
 
-            // Limit startup check to last 1000 or until START_CAMPAIGN_ID
-            const start = Math.max(START_CAMPAIGN_ID, total - 1000);
+            // Limit startup check to last 50 (to save RPC)
+            const start = Math.max(START_CAMPAIGN_ID, total - 50);
 
             for (let i = total - 1; i >= start; i--) {
                 await this.replicateAd(i);

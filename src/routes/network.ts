@@ -192,4 +192,54 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
         node.removeTracker(String(url));
         res.json({ success: true, trackers: node.getTrackers() });
     });
+
+    // ==========================================
+    // COMMUNITY RPC PROXY (Collaborative Infrastructure)
+    // ==========================================
+
+    // POST /rpc-proxy (Handle JSON-RPC requests from fellow nodes)
+    app.post('/rpc-proxy', async (req: Request, res: Response) => {
+        // Simple Guard: No userSigner? No Proxy.
+        // We could add more complex auth based on on-chain subscription later.
+
+        try {
+            const rpcBody = req.body;
+            // Record usage for fairness
+            node.rpcManager.trackRequest();
+
+            // Forward to internal provider's endpoint
+            const result = await node.provider.send(rpcBody.method, rpcBody.params);
+            res.json({
+                jsonrpc: "2.0",
+                id: rpcBody.id,
+                result: result
+            });
+        } catch (e: any) {
+            console.warn(`[RPCProxy] Proxy error: ${e.message}`);
+            res.status(500).json({
+                jsonrpc: "2.0",
+                id: req.body.id,
+                error: { code: -32000, message: e.message }
+            });
+        }
+    });
+
+    // GET /api/network/rpcs (List of community RPC endpoints)
+    app.get('/api/network/rpcs', (req: Request, res: Response) => {
+        const communityList = [
+            'https://eth-sepolia.public.blastapi.io',
+            'https://rpc.ankr.com/eth_sepolia',
+            'https://rpc2.sepolia.org'
+        ];
+
+        // Add peers that are providing RPC service
+        const peersProvidingRpc = Array.from(node.knownPeers.values())
+            .filter(p => p.isTrusted) // Only trust verified nodes
+            .map(p => `${p.endpoint}/rpc-proxy`);
+
+        res.json({
+            default: communityList,
+            community: peersProvidingRpc
+        });
+    });
 };
