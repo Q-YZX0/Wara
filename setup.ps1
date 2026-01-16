@@ -80,27 +80,10 @@ if (!(Get-Command node -ErrorAction SilentlyContinue)) {
     exit
 }
 
-if (!(Get-Command pm2 -ErrorAction SilentlyContinue)) {
-    Write-Host "Instalando PM2..." -ForegroundColor Yellow
-    npm install -g pm2
-}
-
 Write-Host "Instalando dependencias del proyecto..." -ForegroundColor Yellow
 npm install
 npm run build
 
-# 3. Configurar PM2
-Write-Host "Lanzando proceso..." -ForegroundColor Cyan
-
-# PM2 handling
-pm2 delete wara-node 2>$null
-pm2 start dist/server.js --name "wara-node" -- --env .env
-
-pm2 save
-# pm2 startup skipped on Windows due to admin requirement complexity usually
-
 Write-Host "-------------------------------------------------------" -ForegroundColor Green
-Write-Host "WaraNode esta corriendo." -ForegroundColor Green
-Write-Host "   Estado: pm2 status"
-Write-Host "   Logs:   pm2 logs wara-node"
+Write-Host "Configuracion de WaraNode completada." -ForegroundColor Green
 Write-Host "-------------------------------------------------------"
