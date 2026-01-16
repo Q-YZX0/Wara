@@ -1151,18 +1151,31 @@ export class WaraNode {
         }
 
         // UPnP
+        // UPnP
+        const isLocalOnly = process.env.LOCAL_ONLY === 'true';
         if (!process.env.SKIP_UPNP) {
             console.log(`[WaraNode] Attempting UPnP port mapping for ${this.port}...`);
             try {
-                await new Promise<void>((resolve) => {
-                    this.nat.map(this.port, () => { resolve(); });
+                const upnpPromise = new Promise<void>((resolve, reject) => {
+                    this.nat.map(this.port, (err: any) => {
+                        if (err) reject(err);
+                        else resolve();
+                    });
                 });
+
+                // Timeout after 5 seconds
+                const timeoutPromise = new Promise<void>((_, reject) => {
+                    setTimeout(() => reject(new Error('UPnP Timed out')), 5000);
+                });
+
+                await Promise.race([upnpPromise, timeoutPromise]);
+
                 this.publicIp = await new Promise<string>((resolve) => {
                     this.nat.externalIp((err: any, ip: string) => { resolve(ip); });
                 });
                 if (this.publicIp) console.log(`[WaraNode] Public IP detected: ${this.publicIp}`);
             } catch (e) {
-                console.warn(`[WaraNode] UPnP Warning: ${(e as Error).message}`);
+                console.warn(`[WaraNode] UPnP Warning: ${(e as Error).message}. Continuing without port forwarding...`);
             }
         } else {
             console.log('[WaraNode] Skipping UPnP (Env set)');
