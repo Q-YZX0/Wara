@@ -15,7 +15,9 @@ import {
     NODE_REGISTRY_ADDRESS, NODE_REGISTRY_ABI,
     SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI,
     AD_MANAGER_ADDRESS, AD_MANAGER_ABI,
-    MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI
+    MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI,
+    WARA_AIRDROP_ADDRESS, WARA_AIRDROP_ABI,
+    WARA_DAO_ADDRESS, WARA_DAO_ABI
 } from './contracts';
 import { RPCManager } from './rpc-manager';
 import { getMediaMetadata } from './tmdb';
@@ -33,7 +35,8 @@ import { setupVoteRoutes } from './routes/vote';
 import { setupLeaderboardRoutes } from './routes/leaderboard';
 import { setupWalletRoutes } from './routes/wallet';
 import { setupMediaRoutes } from './routes/media';
-import { setupGovernanceRoutes } from './routes/governance';
+import { setupAirdropRoutes } from './routes/airdrop';
+import { setupDaoRoutes } from './routes/dao';
 
 export interface RegisteredLink {
     id: string;
@@ -136,6 +139,8 @@ export class WaraNode {
     public mediaRegistry: ethers.Contract;
     public subContract: ethers.Contract;
     public adManager: ethers.Contract;
+    public airdropContract: ethers.Contract;
+    public daoContract: ethers.Contract;
     private lastSyncedBlock: number = 0;
     private isChainSyncing: boolean = false;
     private chainSyncInterval: NodeJS.Timeout | null = null;
@@ -167,6 +172,8 @@ export class WaraNode {
         this.mediaRegistry = new ethers.Contract(MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI, this.provider);
         this.subContract = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI, this.provider);
         this.adManager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, this.provider);
+        this.airdropContract = new ethers.Contract(WARA_AIRDROP_ADDRESS, WARA_AIRDROP_ABI, this.provider);
+        this.daoContract = new ethers.Contract(WARA_DAO_ADDRESS, WARA_DAO_ABI, this.provider);
 
 
         this.port = port;
@@ -283,6 +290,8 @@ export class WaraNode {
                 this.registryContract = this.registryContract.connect(this.nodeSigner) as any;
                 this.subContract = this.subContract.connect(this.nodeSigner) as any;
                 this.adManager = this.adManager.connect(this.nodeSigner) as any;
+                this.airdropContract = this.airdropContract.connect(this.nodeSigner) as any;
+                this.daoContract = this.daoContract.connect(this.nodeSigner) as any;
 
                 console.log(`[WaraNode] Signing Address: ${this.nodeSigner.address}`);
                 if (this.nodeOwner) console.log(`[WaraNode] Node Owner: ${this.nodeOwner}`);
@@ -311,6 +320,8 @@ export class WaraNode {
             this.mediaRegistry = this.mediaRegistry.connect(this.nodeSigner) as any;
             this.subContract = this.subContract.connect(this.nodeSigner) as any;
             this.adManager = this.adManager.connect(this.nodeSigner) as any;
+            this.airdropContract = this.airdropContract.connect(this.nodeSigner) as any;
+            this.daoContract = this.daoContract.connect(this.nodeSigner) as any;
 
             console.log(`[WaraNode] New Technical Identity created: ${this.nodeSigner.address}`);
         }
@@ -671,8 +682,10 @@ export class WaraNode {
         // SUBSCRIPTION
         this.app.use('/api/subscription', setupSubscriptionRoutes(this));
 
-        // GOVERNANCE
-        setupGovernanceRoutes(this.app, this);
+
+        // AIRDROP & DAO
+        setupAirdropRoutes(this.app, this);
+        setupDaoRoutes(this.app, this);
     }
 
     public registerLink(id: string, encryptedFilePath: string, map: WaraMap, key?: string) {

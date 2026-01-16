@@ -37,7 +37,12 @@ export async function getMediaMetadata(prisma: PrismaClient, sourceId: string, t
         const existing = await prisma.media.findUnique({ where: { waraId } });
         if (existing) {
             if (existing.status === 'rejected' && status !== 'approved') return existing;
-            if (existing.overview && status !== 'approved') return existing;
+
+            // Check if metadata is actually valid/complete
+            const isValid = existing.title && existing.overview && existing.title !== 'Unknown';
+            if (isValid && status !== 'approved') return existing;
+
+            console.log(`[Metadata] Existing metadata for ${waraId} is incomplete or updating. Refreshing...`);
         }
 
         // 2. NEIGHBORHOOD P2P RESOLVER: Search known peers for the manifest

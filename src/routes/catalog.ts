@@ -304,7 +304,7 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
 
                     // Fetch/Propose Metadata
                     console.log(`[Catalog] Request triggered Lazy Registration/Proposal for ${finalSourceId} (${statusTarget})`);
-                    const media = await getMediaMetadata(node.prisma, String(finalSourceId), String(type), statusTarget, node);
+                    const media = await getMediaMetadata(node.prisma, String(finalSourceId), String(type), statusTarget, node, String(source));
 
                     if (media && isContractOwner && signer) {
                         try {
@@ -350,7 +350,7 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
 
     app.get('/api/catalog/meta/:id', async (req: Request, res: Response) => {
         const type = (req.query.type as string) || 'movie';
-        const data = await getMediaMetadata(node.prisma, req.params.id, type);
+        const data = await getMediaMetadata(node.prisma, req.params.id, type, 'approved', node);
         res.json(data || {});
     });
 

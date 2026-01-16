@@ -89,5 +89,30 @@ export const LEADER_BOARD_ADDRESS = "0xFa6440B7F84Cee757a7b41feF26FCf6D1F3AEb17"
 export const LINK_REGISTRY_ADDRESS = "0x2761768C62f885058e191f2441d41fadfBC2a3BF";
 export const MEDIA_REGISTRY_ADDRESS = "0xC4F8D1ae9ADE9BC6bB41e9Aea481DCD7EBbe0d18";
 
+// New Airdrop & Governance (Placeholders - Update after deployment)
+export const WARA_AIRDROP_ADDRESS = "0x0000000000000000000000000000000000000000";
+export const WARA_DAO_ADDRESS = "0x0000000000000000000000000000000000000000";
+export const WARA_VESTING_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+export const WARA_AIRDROP_ABI = [
+    "function register() external",
+    "function claim(uint256 cycleId, uint256 amount, bytes32[] calldata merkleProof) external",
+    "function getRegisteredUsers() external view returns (address[] memory)",
+    "function totalRegistered() external view returns (uint256)",
+    "function currentCycleId() external view returns (uint256)",
+    "function lastCycleTime() external view returns (uint256)",
+    "function isRegistered(address user) external view returns (bool)",
+    "function hasClaimed(uint256 cycleId, address user) external view returns (bool)",
+    "function cycles(uint256 id) external view returns (bytes32 merkleRoot, uint256 totalAmount, uint256 startTime, bool active)"
+];
+
+export const WARA_DAO_ABI = [
+    "function createProposal(string calldata description, address recipient, uint256 amount, uint8 pType) external returns (uint256)",
+    "function vote(uint256 pId, int8 side) external",
+    "function executeProposal(uint256 pId) external",
+    "function nextProposalId() external view returns (uint256)",
+    "function proposals(uint256 id) external view returns (uint256 id, string description, address recipient, uint256 amount, uint8 pType, uint256 upvotes, uint256 downvotes, uint256 deadline, bool executed, bool approved)"
+];
+
 
 
