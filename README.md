@@ -30,6 +30,16 @@
 
 ---
 
+## 📚 Technical Documentation
+
+Deep dive into the architecture, economy, and internal logic of Wara:
+
+-   **[Ecosystem Roles & Identity](docs/architecture-roles.md)**: Node vs. User wallets, Admin keys, and Security modes.
+-   **[Registration & Sentinel System](docs/registration-sentinel.md)**: Blockchain registration, 10/90 fee split, and gas refills.
+-   **[Economy & Governance](docs/economy-governance.md)**: Gasless operations, Reward systems, and DAO content approval.
+
+---
+
 ## 🚀 Quick Start (Linux/macOS)
 
 The easiest way to set up a WaraNode is using our interactive deployment script:
