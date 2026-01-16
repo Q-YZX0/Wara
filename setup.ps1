@@ -42,8 +42,24 @@ if (!(Test-Path .env)) {
     $TMDB_API_KEY = Read-Host "API Key [Vacio]"
 
     # RPC URL
-    $RpcContent = ""
-    if ($env:RPC_URL) { $RpcContent = "RPC_URL=$($env:RPC_URL)" } else { $RpcContent = "RPC_URL=" }
+    $DEFAULT_RPC = "https://ethereum-sepolia-rpc.publicnode.com"
+    
+    Write-Host ""
+    Write-Host "RPC_URL (Opcional/Publico):"
+    Write-Host "  - URL del proveedor RPC (ej. https://sepolia.infura.io/v3/...)"
+    Write-Host "  - Dejar en blanco para usar publico: $DEFAULT_RPC"
+    $INPUT_RPC = Read-Host "RPC URL [Default: Publico]"
+    
+    $FinalRPC = $DEFAULT_RPC
+    
+    if (![string]::IsNullOrWhiteSpace($INPUT_RPC)) {
+        $FinalRPC = $INPUT_RPC
+    }
+    elseif ($env:RPC_URL) { 
+        $FinalRPC = $env:RPC_URL 
+    }
+    
+    $RpcContent = "RPC_URL=$FinalRPC"
 
     # Escribir el archivo .env sin BOM para compatibilidad
     $EnvContent = @"
