@@ -1,5 +1,5 @@
 {
-    "name": "wara-lib",
+    "name": "wara-node",
     "version": "0.1.0",
     "description": "Wara Links Library",
     "main": "dist/index.js",
@@ -7,7 +7,7 @@
     "scripts": {
         "build": "tsc",
         "test": "ts-node test-wara.ts",
-        "start": "npx ts-node src/server.ts",
+        "start": "npx prisma db push && npx ts-node src/server.ts",
         "bundle": "npm run build && pkg dist/server.js --targets node18-win-x64 --output wara-node.exe"
     },
     "keywords": [],

@@ -100,6 +100,10 @@ Write-Host "Instalando dependencias del proyecto..." -ForegroundColor Yellow
 npm install
 npm run build
 
+Write-Host "Inicializando Base de Datos..." -ForegroundColor Yellow
+npx prisma generate
+npx prisma db push
+
 Write-Host "-------------------------------------------------------" -ForegroundColor Green
 Write-Host "Configuracion de WaraNode completada." -ForegroundColor Green
 Write-Host "-------------------------------------------------------"
