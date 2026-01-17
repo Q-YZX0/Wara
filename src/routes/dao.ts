@@ -20,7 +20,7 @@ export const setupDaoRoutes = (app: Express, node: WaraNode) => {
                     description: p.description,
                     recipient: p.recipient,
                     amount: p.amount.toString(),
-                    pType: p.pType,
+                    pType: Number(p.pType),
                     upvotes: p.upvotes.toString(),
                     downvotes: p.downvotes.toString(),
                     deadline: Number(p.deadline),

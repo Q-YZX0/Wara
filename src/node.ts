@@ -37,6 +37,7 @@ import { setupWalletRoutes } from './routes/wallet';
 import { setupMediaRoutes } from './routes/media';
 import { setupAirdropRoutes } from './routes/airdrop';
 import { setupDaoRoutes } from './routes/dao';
+import { setupProfileRoutes } from './routes/profile';
 
 export interface RegisteredLink {
     id: string;
@@ -671,10 +672,13 @@ export class WaraNode {
         setupLeaderboardRoutes(this.app, this);
 
         // ADS
-        setupAdsRoutes(this.app, this);
+        // Removed duplicate setupAdsRoutes(this.app, this);
 
         // WALLET
         setupWalletRoutes(this.app, this);
+
+        // PROFILE
+        setupProfileRoutes(this.app, this);
 
         // Setup Media Registry Routes
         this.app.use('/api/media', setupMediaRoutes(this));
@@ -1248,10 +1252,28 @@ export class WaraNode {
                 const message = `WaraNode:${identifier}:${endpoint}`;
                 const sig = await this.nodeSigner.signMessage(message);
 
+                // Detect Local IP for LAN Optimization
+                let localEndpoint = undefined;
+                try {
+                    const os = require('os');
+                    const nets = os.networkInterfaces();
+                    for (const name of Object.keys(nets)) {
+                        for (const net of nets[name]!) {
+                            if (net.family === 'IPv4' && !net.internal) {
+                                localEndpoint = `http://${net.address}:${this.port}`;
+                                break;
+                            }
+                        }
+                        if (localEndpoint) break;
+                    }
+                } catch (e) { }
+
                 payload.push({
                     name: identifier,
                     endpoint: endpoint,
-                    signature: sig
+                    signature: sig,
+                    // @ts-ignore
+                    localEndpoint: localEndpoint // Extra field for LAN discovery
                 });
             }
 
