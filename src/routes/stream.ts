@@ -9,21 +9,6 @@ import { LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI } from '../contracts';
 
 export const setupStreamRoutes = (app: Express, node: WaraNode) => {
 
-    app.get('/wara/:id/sub/:subId', (req: Request, res: Response) => {
-        const { id, subId } = req.params;
-        // Security check: strictly alphanumeric to prevent path traversal
-        if (!/^[a-z0-9]+$/i.test(id) || !/^[a-z0-9]+$/i.test(subId)) return res.status(400).end();
-
-        // Find file matching pattern
-        // We need to find the extension.
-        const files = fs.readdirSync(node.dataDir);
-        const subFile = files.find(f => f.startsWith(`${id}_${subId}.`));
-
-        if (!subFile) return res.status(404).end();
-
-        res.sendFile(path.join(node.dataDir, subFile));
-    });
-
     app.get('/wara/:id/map', (req: Request, res: Response) => {
         const link = node.links.get(req.params.id);
         if (!link) return res.status(404).json({ error: 'Link not found' });
@@ -197,91 +182,6 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
-    // --- NEW: Submit Ad Proof (Proof of Attention) ---
-    // Path changed to /wara/proof/submit to avoid conflict with /wara/:id
-    app.post('/wara/proof/submit', async (req: Request, res: Response) => {
-        const { campaignId, viewerAddress, uploaderWallet, signature, linkId, contentHash } = req.body;
-
-        if (campaignId === undefined || !viewerAddress || !uploaderWallet || !signature || !linkId || !contentHash) {
-            return res.status(400).json({ error: 'Missing proof components' });
-        }
-
-        try {
-            const { ethers } = await import('ethers');
-
-            // 1. Calculate Standard Hex ID (Allow Pass-through of 0x... IDs)
-            const urlLinkIdHash = linkId.startsWith('0x') ? linkId : ethers.id(linkId);
-
-            // 2. Resolve Official Uploader from Blockchain
-            const reputationContract = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, node.provider);
-            let officialUploader: string = "";
-
-            try {
-                // Try verifying against the ID we have
-                const stats = await reputationContract.getLinkStats(urlLinkIdHash);
-                officialUploader = stats.hoster;
-            } catch (e) { }
-
-            if (!officialUploader || officialUploader === ethers.ZeroAddress) {
-                // If not registered on-chain, the reward goes to the Node Owner (Service Provider)
-                officialUploader = node.nodeOwner || node.nodeSigner?.address || "";
-                if (!officialUploader) {
-                    return res.status(404).json({ error: 'Link owner and node identity not identifiable' });
-                }
-            }
-
-            const hexContentHash = contentHash.startsWith('0x') ? contentHash : `0x${contentHash}`;
-
-            // 3. Verify Signature
-            // Reconstruct exactly as signed by User: (campaignId, uploaderWallet, viewer, contentHash, SIGNED_LINK_ID)
-            // MUST MATCH SMART CONTRACT
-            const messageHash = ethers.solidityPackedKeccak256(
-                ["uint256", "address", "address", "bytes32", "bytes32"],
-                [campaignId, officialUploader, viewerAddress, hexContentHash, urlLinkIdHash]
-            );
-
-            const recovered = ethers.verifyMessage(ethers.getBytes(messageHash), signature);
-
-            if (recovered.toLowerCase() !== viewerAddress.toLowerCase()) {
-                console.warn(`[WaraNode] Invalid Ad Proof signature from ${viewerAddress}`);
-                return res.status(401).json({ error: 'Invalid signature: Signer does not match viewer' });
-            }
-
-            console.log(`[WaraNode] Verified Ad Proof for Uploader ${officialUploader} from ${viewerAddress}`);
-
-            // 4. Save Proof
-            const proofId = `${Date.now()}_${viewerAddress.substring(0, 8)}`;
-            const proofsDir = path.join(node.dataDir, 'proofs');
-            if (!fs.existsSync(proofsDir)) fs.mkdirSync(proofsDir, { recursive: true });
-
-            const proofPath = path.join(proofsDir, `${proofId}.json`);
-
-            fs.writeFileSync(proofPath, JSON.stringify({
-                campaignId,
-                viewerAddress,
-                uploaderWallet: officialUploader,
-                signature,
-                linkId: urlLinkIdHash, // SAVE THE HEX ID for Contract Compatibility
-                contentHash,
-                createdAt: new Date().toISOString()
-            }, null, 2));
-
-            res.json({
-                success: true,
-                message: 'Proof submitted and stored on Node.',
-                sessionExpires: Date.now() + 4 * 60 * 60 * 1000
-            });
-
-            // Record Session for this IP and Link
-            const sessionKey = `${req.ip}_${linkId}`;
-            node.activeSessions.set(sessionKey, Date.now() + 4 * 60 * 60 * 1000);
-        } catch (e) {
-            console.error("Failed to store ad proof:", e);
-            res.status(500).json({ error: 'Internal storage error' });
-        }
-    });
-
-
     // GET /api/progress
     app.get('/wara/user/progress', async (req: Request, res: Response) => {
         const { sourceId, source = 'tmdb', season, episode, wallet } = req.query;
@@ -377,7 +277,7 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
             }
 
             // 2. Check active session (simple IP check for now from memory)
-            const sessionKey = `${viewerIp}_${linkId} `;
+            const sessionKey = `${viewerIp}_${linkId}`.trim();
             // Note: activeSessions in node.ts seems to store Strings (username) for authToken, 
             // BUT looking at the code I read, there was `this.activeSessions` map storing expiry? 
             // Wait, node.ts had "activeSessions: Map<string, number>". 
@@ -475,36 +375,137 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
-    // POST /wara/proof/premium - Store Premium View Proof
-    app.post('/wara/proof/premium', async (req: Request, res: Response) => {
-        const { wallet, signature, message, linkId, contentHash } = req.body;
-        if (!wallet || !signature || !message || !linkId) return res.status(400).json({ error: "Missing auth data" });
+    // --- NEW: Submit Ad Proof (Proof of Attention) ---
+    // Path changed to /wara/proof/submit to avoid conflict with /wara/:id
+    app.post('/wara/proof/submit', async (req: Request, res: Response) => {
+        const { campaignId, viewerAddress, uploaderWallet, signature, linkId, contentHash } = req.body;
+
+        if (campaignId === undefined || !viewerAddress || !uploaderWallet || !signature || !linkId || !contentHash) {
+            return res.status(400).json({ error: 'Missing proof components' });
+        }
 
         try {
             const { ethers } = await import('ethers');
 
-            // 1. Verify Signature
-            const signer = ethers.verifyMessage(message, signature);
-            if (signer.toLowerCase() !== wallet.toLowerCase()) return res.status(401).json({ error: "Invalid signature" });
+            // 1. Calculate Standard Hex ID (Allow Pass-through of 0x... IDs)
+            const urlLinkIdHash = linkId.startsWith('0x') ? linkId : ethers.id(linkId);
 
-            // 2. Verify Subscription Again (Safety check)
-            // @ts-ignore
-            const isSubscribed = await node.subContract.isSubscribed(wallet);
-            if (!isSubscribed) return res.status(403).json({ error: "No active subscription" });
-
-            // 3. Resolve Hoster to pay (just like Ads)
-            const onChainLinkId = ethers.solidityPackedKeccak256(["string"], [linkId]);
+            // 2. Resolve Official Uploader from Blockchain
             const reputationContract = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, node.provider);
+            let officialUploader: string = "";
 
-            let officialUploader: string = ethers.ZeroAddress;
             try {
-                const stats = await reputationContract.getLinkStats(onChainLinkId);
+                // Try verifying against the ID we have
+                const stats = await reputationContract.getLinkStats(urlLinkIdHash);
                 officialUploader = stats.hoster;
             } catch (e) { }
 
             if (!officialUploader || officialUploader === ethers.ZeroAddress) {
-                // Fallback to Node Owner for unregistered content
-                officialUploader = node.nodeOwner || node.nodeSigner?.address || ethers.ZeroAddress;
+                // If not registered on-chain, the reward goes to the Node Owner (Service Provider)
+                officialUploader = node.nodeOwner || node.nodeSigner?.address || "";
+                if (!officialUploader) {
+                    return res.status(404).json({ error: 'Link owner and node identity not identifiable' });
+                }
+            }
+
+            const hexContentHash = contentHash.startsWith('0x') ? contentHash : `0x${contentHash}`;
+
+            // 3. Verify Signature
+            // Reconstruct exactly as signed by User: (campaignId, uploaderWallet, viewer, contentHash, SIGNED_LINK_ID)
+            // MUST MATCH SMART CONTRACT
+            const messageHash = ethers.solidityPackedKeccak256(
+                ["uint256", "address", "address", "bytes32", "bytes32"],
+                [campaignId, officialUploader, viewerAddress, hexContentHash, urlLinkIdHash]
+            );
+
+            const recovered = ethers.verifyMessage(ethers.getBytes(messageHash), signature);
+
+            if (recovered.toLowerCase() !== viewerAddress.toLowerCase()) {
+                console.warn(`[WaraNode] Invalid Ad Proof signature from ${viewerAddress}`);
+                return res.status(401).json({ error: 'Invalid signature: Signer does not match viewer' });
+            }
+
+            console.log(`[WaraNode] Verified Ad Proof for Uploader ${officialUploader} from ${viewerAddress}`);
+
+            // 4. Save Proof
+            const proofId = `${Date.now()}_${viewerAddress.substring(0, 8)}`;
+            const proofsDir = path.join(node.dataDir, 'proofs');
+            if (!fs.existsSync(proofsDir)) fs.mkdirSync(proofsDir, { recursive: true });
+
+            const proofPath = path.join(proofsDir, `${proofId}.json`);
+
+            fs.writeFileSync(proofPath, JSON.stringify({
+                campaignId,
+                viewerAddress,
+                uploaderWallet: officialUploader,
+                signature,
+                linkId: urlLinkIdHash, // SAVE THE HEX ID for Contract Compatibility
+                contentHash,
+                createdAt: new Date().toISOString()
+            }, null, 2));
+
+            res.json({
+                success: true,
+                message: 'Proof submitted and stored on Node.',
+                sessionExpires: Date.now() + 4 * 60 * 60 * 1000
+            });
+
+            // Record Session for this IP and Link
+            const sessionKey = `${req.ip}_${linkId}`;
+            node.activeSessions.set(sessionKey, Date.now() + 4 * 60 * 60 * 1000);
+        } catch (e) {
+            console.error("Failed to store ad proof:", e);
+            res.status(500).json({ error: 'Internal storage error' });
+        }
+    });
+
+    // POST /wara/proof/premium - Store Premium View Proof (for Subscriptions)
+    app.post('/wara/proof/premium', async (req: Request, res: Response) => {
+        const { wallet, signature, nonce, linkId, contentHash, hoster } = req.body;
+        if (!wallet || !signature || !nonce || !linkId) {
+            return res.status(400).json({ error: "Missing premium proof data" });
+        }
+
+        try {
+            const { ethers } = await import('ethers');
+
+            // 1. Resolve hoster
+            const urlLinkIdHash = linkId.startsWith('0x') ? linkId : ethers.id(linkId);
+            const hexContentHash = (contentHash && contentHash.startsWith('0x')) ? contentHash : (contentHash ? `0x${contentHash}` : ethers.ZeroHash);
+
+            let officialHoster = hoster;
+            if (!officialHoster) {
+                const reputationContract = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, node.provider);
+                try {
+                    const stats = await reputationContract.getLinkStats(urlLinkIdHash);
+                    officialHoster = stats.hoster;
+                } catch (e) { }
+            }
+
+            if (!officialHoster || officialHoster === ethers.ZeroAddress) {
+                officialHoster = node.nodeOwner || node.nodeSigner?.address || "";
+            }
+
+            if (!officialHoster) return res.status(404).json({ error: "Hoster identity not found" });
+
+            // 2. Verify Signature matching Subscriptions.sol:
+            // keccak256(abi.encodePacked(hoster, viewer, contentHash, nonce, block.chainid))
+            const messageHash = ethers.solidityPackedKeccak256(
+                ["address", "address", "bytes32", "uint256", "uint256"],
+                [officialHoster, wallet, hexContentHash, nonce, node.chainId || 1] // Default to 1 if not set, but node should have chainId
+            );
+
+            const recovered = ethers.verifyMessage(ethers.getBytes(messageHash), signature);
+            if (recovered.toLowerCase() !== wallet.toLowerCase()) {
+                return res.status(401).json({ error: "Invalid signature: Signer must be the viewer" });
+            }
+
+            // 3. Verify Subscription (Optional but recommended for session grant)
+            // @ts-ignore
+            if (node.subContract) {
+                // @ts-ignore
+                const isSubscribed = await node.subContract.isSubscribed(wallet);
+                if (!isSubscribed) return res.status(403).json({ error: "No active subscription" });
             }
 
             // 4. Store Proof
@@ -512,31 +513,26 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
             const proofsDir = path.join(node.dataDir, 'proofs');
             if (!fs.existsSync(proofsDir)) fs.mkdirSync(proofsDir, { recursive: true });
 
-            const proofPath = path.join(proofsDir, `${proofId}.json`);
-
-            fs.writeFileSync(proofPath, JSON.stringify({
-                type: 'premium_view',
-                viewerAddress: wallet,
-                uploaderWallet: officialUploader,
+            fs.writeFileSync(path.join(proofsDir, `${proofId}.json`), JSON.stringify({
+                type: 'premium',
+                hoster: officialHoster,
+                viewer: wallet,
+                contentHash: hexContentHash,
+                nonce,
                 signature,
-                message,
-                linkId,
-                contentHash: contentHash || '',
+                linkId: urlLinkIdHash,
                 createdAt: new Date().toISOString()
             }, null, 2));
 
-            // 5. Grant Session (Short term, per view)
+            // 5. Grant Session
             const sessionKey = `${req.ip}_${linkId}`;
-            node.activeSessions.set(sessionKey, Date.now() + 4 * 60 * 60 * 1000); // 4 Hours
+            node.activeSessions.set(sessionKey, Date.now() + 4 * 60 * 60 * 1000);
 
             res.json({ success: true, message: "Premium proof accepted." });
-        } catch (e) {
-            console.error("Premium proof error", e);
-            res.status(500).json({ error: "Verification failed" });
+
+        } catch (e: any) {
+            console.error("Premium proof error:", e);
+            res.status(500).json({ error: e.message || "Failed to process premium proof" });
         }
     });
-
-
-
-
 };

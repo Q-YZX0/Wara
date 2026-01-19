@@ -88,69 +88,62 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
         });
     });
 
-    // DELETE /admin/delete/:id
-    app.delete('/admin/delete/:id', node.requireAuth, async (req: Request, res: Response) => {
-        const { id } = req.params;
-        const link = node.links.get(id);
-        if (!link) return res.status(404).json({ error: "Link not found" });
+    // --- Admin: Upload Subtitle ---
+    app.post('/admin/subtitle', node.requireAuth, (req: Request, res: Response) => {
+        const linkId = req.headers['x-link-id'] as string;
+        const lang = req.headers['x-lang'] as string;
+        const label = req.headers['x-label'] as string;
+        const filename = req.headers['x-filename'] as string;
 
-        try {
-            node.links.delete(id);
-            const waraPath = link.filePath;
-            const jsonPath = waraPath.replace('.wara', '.json');
-            if (fs.existsSync(waraPath)) fs.unlinkSync(waraPath);
-            if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
-
-            const dir = path.dirname(waraPath);
-            try {
-                const files = fs.readdirSync(dir);
-                for (const f of files) {
-                    if (f.startsWith(`${id}_`)) fs.unlinkSync(path.join(dir, f));
-                }
-            } catch (e) { }
-
-            console.log(`[WaraNode] Deleted link: ${id}`);
-            res.json({ success: true });
-        } catch (e) {
-            console.error("Delete failed", e);
-            res.status(500).json({ error: "Failed to delete files" });
+        if (!linkId || !lang || !node.links.has(linkId)) {
+            return res.status(404).json({ error: 'Link not found' });
         }
-    });
 
-    // POST /admin/mirror
-    app.post('/admin/mirror', node.requireAuth, async (req: Request, res: Response) => {
-        try {
-            const { outputUrl } = req.body;
-            if (!outputUrl) return res.status(400).json({ error: "Missing outputUrl" });
+        const link = node.links.get(linkId)!;
+        // Determine extension. Prefer vtt.
+        let ext = 'vtt';
+        if (filename && filename.endsWith('.srt')) ext = 'srt';
 
-            console.log(`[WaraNode] Mirroring content from ${outputUrl}...`);
-            const mapRes = await fetch(`${outputUrl}/map`);
-            if (!mapRes.ok) throw new Error("Could not fetch remote map");
-            const map = await mapRes.json() as WaraMap;
+        const subFileName = `${linkId}_${lang}.${ext}`;
+        const subFilePath = path.join(node.dataDir, subFileName);
 
-            const streamUrl = `${outputUrl}/stream`;
-            const response = await fetch(streamUrl);
-            if (!response.ok || !response.body) throw new Error("Could not fetch remote stream");
+        const writeStream = fs.createWriteStream(subFilePath);
+        req.pipe(writeStream);
 
-            const arrayBuffer = await response.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            const localPath = path.join(node.dataDir, `${map.id}.wara`);
-            fs.writeFileSync(localPath, buffer);
-            fs.writeFileSync(path.join(node.dataDir, `${map.id}.json`), JSON.stringify(map, null, 2));
+        writeStream.on('finish', () => {
+            // Cleanup conflicting extensions (priority issue)
+            const otherExt = ext === 'vtt' ? 'srt' : 'vtt';
+            const otherFile = path.join(node.dataDir, `${linkId}_${lang}.${otherExt}`);
+            try { if (fs.existsSync(otherFile)) fs.unlinkSync(otherFile); } catch (e) { }
 
-            node.registerLink(map.id, localPath, map);
-            const effectiveHost = (node as any).publicIp ? (node as any).publicIp : 'localhost';
+            // Update Link Map
+            if (!link.map.subtitles) link.map.subtitles = [];
+            // Remove existing if any (Case Insensitive + Trim)
+            const targetLang = lang.trim().toLowerCase();
+            link.map.subtitles = link.map.subtitles.filter(s => (s.lang || '').trim().toLowerCase() !== targetLang);
 
-            res.json({
-                success: true,
-                linkId: map.id,
-                mirroredFrom: outputUrl,
-                map: { ...map, publicEndpoint: `http://${effectiveHost}:${node.port}/wara/${map.id}` }
+            link.map.subtitles.push({
+                id: `${linkId}_${lang}`,
+                lang,
+                label: label || lang.toUpperCase()
             });
-        } catch (e: any) {
-            console.error(e);
-            res.status(500).json({ error: e.message });
-        }
+
+            // Persist new map to JSON
+            try {
+                const mapPath = path.join(node.dataDir, `${linkId}.json`);
+                fs.writeFileSync(mapPath, JSON.stringify(link.map, null, 2));
+                console.log(`[WaraNode] Subtitle added: ${lang} for ${linkId}`);
+                res.json({ success: true });
+            } catch (e) {
+                console.error("Failed to update map json", e);
+                res.status(500).json({ error: "Map update failed" });
+            }
+        });
+
+        writeStream.on('error', (err) => {
+            console.error("Subtitle upload failed", err);
+            res.status(500).json({ error: "Write failed" });
+        });
     });
 
     // POST /admin/peer
@@ -426,64 +419,6 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
         });
     });
 
-    // --- Admin: Upload Subtitle ---
-    app.post('/admin/subtitle', node.requireAuth, (req: Request, res: Response) => {
-        const linkId = req.headers['x-link-id'] as string;
-        const lang = req.headers['x-lang'] as string;
-        const label = req.headers['x-label'] as string;
-        const filename = req.headers['x-filename'] as string;
-
-        if (!linkId || !lang || !node.links.has(linkId)) {
-            return res.status(404).json({ error: 'Link not found' });
-        }
-
-        const link = node.links.get(linkId)!;
-        // Determine extension. Prefer vtt.
-        let ext = 'vtt';
-        if (filename && filename.endsWith('.srt')) ext = 'srt';
-
-        const subFileName = `${linkId}_${lang}.${ext}`;
-        const subFilePath = path.join(node.dataDir, subFileName);
-
-        const writeStream = fs.createWriteStream(subFilePath);
-        req.pipe(writeStream);
-
-        writeStream.on('finish', () => {
-            // Cleanup conflicting extensions (priority issue)
-            const otherExt = ext === 'vtt' ? 'srt' : 'vtt';
-            const otherFile = path.join(node.dataDir, `${linkId}_${lang}.${otherExt}`);
-            try { if (fs.existsSync(otherFile)) fs.unlinkSync(otherFile); } catch (e) { }
-
-            // Update Link Map
-            if (!link.map.subtitles) link.map.subtitles = [];
-            // Remove existing if any (Case Insensitive + Trim)
-            const targetLang = lang.trim().toLowerCase();
-            link.map.subtitles = link.map.subtitles.filter(s => (s.lang || '').trim().toLowerCase() !== targetLang);
-
-            link.map.subtitles.push({
-                id: `${linkId}_${lang}`,
-                lang,
-                label: label || lang.toUpperCase()
-            });
-
-            // Persist new map to JSON
-            try {
-                const mapPath = path.join(node.dataDir, `${linkId}.json`);
-                fs.writeFileSync(mapPath, JSON.stringify(link.map, null, 2));
-                console.log(`[WaraNode] Subtitle added: ${lang} for ${linkId}`);
-                res.json({ success: true });
-            } catch (e) {
-                console.error("Failed to update map json", e);
-                res.status(500).json({ error: "Map update failed" });
-            }
-        });
-
-        writeStream.on('error', (err) => {
-            console.error("Subtitle upload failed", err);
-            res.status(500).json({ error: "Write failed" });
-        });
-    });
-
 
     //--Proof admin
 
@@ -556,5 +491,4 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
         console.log(`[WaraNode] Deleted ${deleted} synced votes.`);
         res.json({ success: true, deleted });
     });
-
 };

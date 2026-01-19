@@ -56,7 +56,7 @@ export class PriceOracleService {
             console.log(`[Oracle] Market Discovery: ETH=$${ethPrice.toFixed(2)} | WARA=${waraEthPrice.toFixed(6)} ETH | WARA=$${waraUsdPrice.toFixed(4)} USD`);
 
             return waraUsdPrice;
-        } catch (e) {
+        } catch (e: any) {
             console.error("[Oracle] Market Discovery failed:", e.message);
             return 0;
         }
@@ -85,7 +85,7 @@ export class PriceOracleService {
             // 2. Act as Judge: Try to submit if we have enough signatures
             await this.trySubmitAsJudge();
 
-        } catch (e) {
+        } catch (e: any) {
             console.error("[Oracle] Sync cycle failed:", e.message);
         }
     }
@@ -127,7 +127,7 @@ export class PriceOracleService {
                 await tx.wait();
                 console.log("[Oracle] Price submission confirmed!");
                 this.collectedSignatures.clear(); // Reset after successful submission
-            } catch (e) {
+            } catch (e: any) {
                 console.warn("[Oracle] Judge submission rejected (possibly already updated or not jury selection):", e.message);
             }
         }

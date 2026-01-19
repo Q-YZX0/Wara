@@ -253,8 +253,10 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
             };
 
             const premiumBatch = {
+                hosters: [] as string[],
                 viewers: [] as string[],
-                linkIds: [] as string[],
+                contentHashes: [] as string[],
+                nonces: [] as any[],
                 signatures: [] as string[],
                 filenames: [] as string[]
             };
@@ -267,31 +269,30 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
                     const content = fs.readFileSync(path.join(proofsDir, file), 'utf-8');
                     const proof = JSON.parse(content);
 
-                    // Use the uploaderWallet in the JSON as a hint for filtering
-                    if (proof.uploaderWallet && proof.uploaderWallet.toLowerCase() === signer.address.toLowerCase()) {
+                    // Use the uploaderWallet or hoster in the JSON as a hint for filtering
+                    const targetUploader = (proof.uploaderWallet || proof.hoster || "").toLowerCase();
+                    if (targetUploader === signer.address.toLowerCase()) {
 
-                        // FIX: Validate LinkID format to avoid crashing the batch with legacy non-hex IDs
-                        if (!proof.linkId || !proof.linkId.startsWith('0x') || proof.linkId.length !== 66) {
-                            console.warn(`[Wallet] Skipping proof with invalid LinkID format (legacy?): ${file} (${proof.linkId})`);
-                            continue;
-                        }
-
-                        // FIX: Do not re-hash the LinkID. It is correctly stored by stream.ts as the On-Chain Hex ID.
-                        // If we hash it again, we corrupt it.
-                        const onChainLinkId = proof.linkId;
-
-                        if (proof.type === 'premium_view') {
-                            premiumBatch.viewers.push(proof.viewerAddress);
-                            premiumBatch.linkIds.push(onChainLinkId);
+                        if (proof.type === 'premium' || proof.type === 'premium_view') {
+                            premiumBatch.hosters.push(proof.hoster || proof.uploaderWallet);
+                            premiumBatch.viewers.push(proof.viewer || proof.viewerAddress);
+                            premiumBatch.contentHashes.push(proof.contentHash || ethers.ZeroHash);
+                            premiumBatch.nonces.push(proof.nonce || 0);
                             premiumBatch.signatures.push(proof.signature);
                             premiumBatch.filenames.push(file);
                         } else {
                             // Default to Ad Proof
-                            const hexContentHash = proof.contentHash.startsWith('0x') ? proof.contentHash : `0x${proof.contentHash}`;
+                            // FIX: Validate LinkID format
+                            if (!proof.linkId || !proof.linkId.startsWith('0x') || proof.linkId.length !== 66) {
+                                console.warn(`[Wallet] Skipping ad proof with invalid LinkID format: ${file}`);
+                                continue;
+                            }
+
+                            const hexContentHash = (proof.contentHash && proof.contentHash.startsWith('0x')) ? proof.contentHash : (proof.contentHash ? `0x${proof.contentHash}` : ethers.ZeroHash);
                             adBatch.campaignIds.push(proof.campaignId);
                             adBatch.viewers.push(proof.viewerAddress);
                             adBatch.contentHashes.push(hexContentHash);
-                            adBatch.linkIds.push(onChainLinkId);
+                            adBatch.linkIds.push(proof.linkId);
                             adBatch.signatures.push(proof.signature);
                             adBatch.filenames.push(file);
                         }
@@ -306,8 +307,8 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
             // 4. Process Ad Batch
             if (adBatch.campaignIds.length > 0) {
                 console.log(`[Wallet] Claiming ${adBatch.campaignIds.length} ad rewards...`);
-                const batchAbi = ["function batchClaimAdView(uint256[] campaignIds, address[] viewers, bytes32[] contentHashes, bytes32[] linkIds, bytes[] signatures) external"];
-                const adContract = new ethers.Contract(AD_MANAGER_ADDRESS, batchAbi, signer);
+                // Use the ABI we just updated in contracts.ts
+                const adContract = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, signer);
 
                 try {
                     const tx = await adContract.batchClaimAdView(adBatch.campaignIds, adBatch.viewers, adBatch.contentHashes, adBatch.linkIds, adBatch.signatures);
@@ -325,31 +326,39 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
                     }
 
                 } catch (e: any) {
-                    console.error("❌ Batch Claim FAILED:", e.shortMessage || e.message);
-                    // Move to FAILED to prevent loop
-                    const failedDir = path.join(node.dataDir, 'failed');
-                    if (!fs.existsSync(failedDir)) fs.mkdirSync(failedDir);
-                    for (const file of adBatch.filenames) {
-                        try {
-                            console.log(`Checking file to move to failed: ${file}`);
-                            if (fs.existsSync(path.join(proofsDir, file))) {
-                                fs.renameSync(path.join(proofsDir, file), path.join(failedDir, file));
-                                console.log(`Moved ${file} to failed.`);
-                            }
-                        } catch (err) { console.error(`Failed to move ${file} to failed dir`, err); }
-                    }
+                    console.error("❌ Batch Ad Claim FAILED:", e.shortMessage || e.message);
                 }
             }
 
             // 5. Process Premium Batch
-            if (premiumBatch.viewers.length > 0) {
-                console.log(`[Wallet] Claiming ${premiumBatch.viewers.length} premium rewards...`);
+            if (premiumBatch.hosters.length > 0) {
+                console.log(`[Wallet] Claiming ${premiumBatch.hosters.length} premium rewards...`);
                 const subContract = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI, signer);
-                const tx = await subContract.batchRecordPremiumView(premiumBatch.viewers, premiumBatch.signatures, premiumBatch.linkIds);
-                await tx.wait();
-                results.premium = premiumBatch.filenames.length;
-                results.txs.push(tx.hash);
-                premiumBatch.filenames.forEach(f => fs.unlinkSync(path.join(proofsDir, f)));
+
+                try {
+                    const tx = await subContract.recordPremiumViewBatch(
+                        premiumBatch.hosters,
+                        premiumBatch.viewers,
+                        premiumBatch.contentHashes,
+                        premiumBatch.nonces,
+                        premiumBatch.signatures
+                    );
+                    await tx.wait();
+
+                    results.premium = premiumBatch.filenames.length;
+                    results.txs.push(tx.hash);
+
+                    // Archive premium proofs
+                    const archiveDir = path.join(node.dataDir, 'archive');
+                    if (!fs.existsSync(archiveDir)) fs.mkdirSync(archiveDir);
+                    for (const file of premiumBatch.filenames) {
+                        try {
+                            fs.renameSync(path.join(proofsDir, file), path.join(archiveDir, file));
+                        } catch (e) { }
+                    }
+                } catch (e: any) {
+                    console.error("❌ Batch Premium Claim FAILED:", e.shortMessage || e.message);
+                }
             }
 
             res.json({ success: true, ...results });

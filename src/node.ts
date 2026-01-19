@@ -103,6 +103,7 @@ export class WaraNode {
         return null;
     }
 
+
     public async getLocalUserWallet(address: string, password?: string): Promise<any> {
         try {
             const { decryptPrivateKey } = await import('./encryption');
@@ -136,6 +137,7 @@ export class WaraNode {
     public nodeName: string | null = null; // Nombre registrado en blockchain (ej: "salsa")
     public nodeSigner: ethers.Wallet | null = null; // Identidad delegada para firmar gossip
     public nodeOwner: string | null = null; // Wallet del operador (registrador)
+    public chainId: number = 1;
     public rpcManager: RPCManager;
     public provider: ethers.JsonRpcProvider;
     public registryContract: ethers.Contract;
@@ -248,6 +250,14 @@ export class WaraNode {
     }
 
     private async init() {
+        try {
+            const network = await this.provider.getNetwork();
+            this.chainId = Number(network.chainId);
+            console.log(`[WaraNode] Connected to ChainID: ${this.chainId}`);
+        } catch (e) {
+            console.error("[WaraNode] Failed to detect ChainID, using 1");
+        }
+
         await this.detectRegion(); // Wait for IP/Region
         this.startSentinelCron();
         this.startGarbageCollector(); // Start cleanup of stale uploads

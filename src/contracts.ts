@@ -15,8 +15,7 @@ export const SUBSCRIPTIONS_ABI = [
     "function isSubscribed(address user) external view returns (bool)",
     "function getCurrentPrice() external view returns (uint256)",
     "function recordPremiumView(address hoster, address viewer, bytes32 contentHash, uint256 nonce, bytes calldata signature) external",
-    "function claimHosterReward() external",
-    "function getPendingReward(address hoster) view returns (uint256)",
+    "function recordPremiumViewBatch(address[] calldata hosters, address[] calldata viewers, bytes32[] calldata contentHashes, uint256[] calldata nonces, bytes[] calldata signatures) external",
     "function getStats() external view returns (uint256, uint256, uint256, uint256, uint256)",
     "function getSubscription(address user) external view returns (bool active, uint256 expiresAt, uint256 daysRemaining, uint256 totalPaid, uint256 subscriptionCount)"
 ];
@@ -29,6 +28,7 @@ export const AD_MANAGER_ABI = [
     "function cancelCampaign(uint256 campaignId) external",
     "function topUpCampaign(uint256 campaignId, uint256 amount) external",
     "function claimAdView(uint256 campaignId, address viewer, bytes32 contentHash, bytes32 linkId, bytes memory signature) external",
+    "function batchClaimAdView(uint256[] calldata campaignIds, address[] calldata viewers, bytes32[] calldata contentHashes, bytes32[] calldata linkIds, bytes[] calldata signatures) external",
     "function reportAd(uint256 campaignId, uint8 reasonCode) external",
     "function getCampaignsByAdvertiser(address advertiser) external view returns (tuple(uint256 id, tuple(address advertiser, uint256 budgetWARA, uint8 duration, string videoHash, uint256 viewsRemaining, uint8 category, bool active) campaign)[])",
     "function getReportCount(uint256 campaignId) external view returns (uint256)",
@@ -117,7 +117,8 @@ export const WARA_DAO_ABI = [
 
 export const WARA_ORACLE_ABI = [
     "function submitPrice(int256 _price, uint256 _timestamp, bytes[] calldata _signatures) external",
-    "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
+    "function latestAnswer() external view returns (int256)",
+    "function latestTimestamp() external view returns (uint256)",
     "function decimals() external view returns (uint8)",
     "function owner() external view returns (address)"
 ];
