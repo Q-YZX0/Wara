@@ -1,6 +1,5 @@
 import { PrismaClient } from '@prisma/client';
 
-const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
 
 const fs = require('fs');
@@ -27,7 +26,7 @@ async function downloadImage(url: string, destPath: string) {
 }
 
 export async function getMediaMetadata(prisma: PrismaClient, sourceId: string, type: string = 'movie', status: string = 'approved', node?: any, source: string = 'tmdb', extraMeta: any = {}) {
-    if (!TMDB_API_KEY && !node && source === 'tmdb') return null;
+    if (!process.env.TMDB_API_KEY && !node && source === 'tmdb') return null;
 
     try {
         const { ethers } = require('ethers');
@@ -124,12 +123,12 @@ export async function getMediaMetadata(prisma: PrismaClient, sourceId: string, t
         }
 
         // 4. Fallback to TMDB
-        if (!TMDB_API_KEY) {
+        if (!process.env.TMDB_API_KEY) {
             console.log(`[Metadata] No TMDB key and Neighborhood search failed for ${waraId}.`);
             return existing;
         }
 
-        const res = await fetch(`${TMDB_BASE_URL}/${type}/${sourceId}?api_key=${TMDB_API_KEY}&append_to_response=credits,videos,similar`);
+        const res = await fetch(`${TMDB_BASE_URL}/${type}/${sourceId}?api_key=${process.env.TMDB_API_KEY}&append_to_response=credits,videos,similar`);
         if (!res.ok) return null;
 
         const data = await res.json();
@@ -210,9 +209,9 @@ export async function getMediaMetadata(prisma: PrismaClient, sourceId: string, t
 }
 
 export async function getSeasonDetails(prisma: PrismaClient, sourceId: string, seasonNumber: number) {
-    if (!TMDB_API_KEY) return null;
+    if (!process.env.TMDB_API_KEY) return null;
     try {
-        const res = await fetch(`${TMDB_BASE_URL}/tv/${sourceId}/season/${seasonNumber}?api_key=${TMDB_API_KEY}`);
+        const res = await fetch(`${TMDB_BASE_URL}/tv/${sourceId}/season/${seasonNumber}?api_key=${process.env.TMDB_API_KEY}`);
         if (!res.ok) return null;
         const data = await res.json();
         return data;
@@ -223,9 +222,9 @@ export async function getSeasonDetails(prisma: PrismaClient, sourceId: string, s
 }
 
 export async function searchTMDB(query: string) {
-    if (!TMDB_API_KEY) return [];
+    if (!process.env.TMDB_API_KEY) return [];
     try {
-        const res = await fetch(`${TMDB_BASE_URL}/search/multi?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}`);
+        const res = await fetch(`${TMDB_BASE_URL}/search/multi?api_key=${process.env.TMDB_API_KEY}&query=${encodeURIComponent(query)}`);
         if (!res.ok) return [];
         const data = await res.json();
 
@@ -236,8 +235,8 @@ export async function searchTMDB(query: string) {
                 sourceId: String(d.id),
                 type: d.media_type,
                 title: d.media_type === 'movie' ? d.title : d.name,
-                year: (d.media_type === 'movie' ? d.release_date : d.first_air_date)?.substring(0, 4) || '?',
-                poster: d.poster_path ? `https://image.tmdb.org/t/p/w200${d.poster_path}` : null,
+                releaseDate: (d.media_type === 'movie' ? d.release_date : d.first_air_date) || null,
+                posterPath: d.poster_path || null,
                 overview: d.overview
             }));
     } catch (e) {

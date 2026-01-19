@@ -38,6 +38,7 @@ import { setupMediaRoutes } from './routes/media';
 import { setupAirdropRoutes } from './routes/airdrop';
 import { setupDaoRoutes } from './routes/dao';
 import { setupProfileRoutes } from './routes/profile';
+import { PriceOracleService } from './oracle-service';
 
 export interface RegisteredLink {
     id: string;
@@ -78,6 +79,7 @@ export class WaraNode {
     // Store unlocked wallets in memory related to session tokens
     // Note: In production, use HSM or secure enclave. For MVP/Local Node, memory is acceptable.
     public activeWallets: Map<string, any> = new Map(); // AuthToken -> ethers.Wallet
+    public oracleService: PriceOracleService | null = null;
 
     public getAuthenticatedSigner(req: express.Request): ethers.Wallet | null {
         // 1. Check for Active User Session
@@ -257,6 +259,10 @@ export class WaraNode {
             // Initial Peer Sync
             this.syncNetwork();
         }
+
+        // Initialize Price Oracle DON Participant
+        this.oracleService = new PriceOracleService(this);
+        this.oracleService.start().catch(e => console.error("[Oracle] Failed to start:", e));
     }
 
     private loadNodeName() {
@@ -975,51 +981,62 @@ export class WaraNode {
                         }
 
                         // Identity: TMDB ID + Uploader Wallet (Invariant)
-                        // If no wallet (anon peer), fall back to URL exact match
                         let existingLink = null;
 
-                        // Construct VIRTUAL URL: wara://<ID>/wara/<resource>
-                        // ID can be Name (if .wara) or Wallet (if anon/IP)
-                        let authority = name;
-                        // If name implies it's just an IP or generic, PREFER WALLET if available
-                        const isGenericName = name.includes(':') || name.startsWith('http');
-                        if ((isGenericName || !name.includes('.wara')) && item.uploaderWallet) {
-                            authority = item.uploaderWallet;
-                        }
+                        // STORE HOST AUTHORITY ONLY (Pragmatic Reuse of URL field)
+                        // We store the Peer Name (or Address) in the 'url' field.
+                        // The full URL will be constructed at runtime: http://<host>/wara/<id>
+                        // Assumption: Local ID matches Remote ID for the same Link record.
+                        const storageAuthority = name;
 
-                        let storageUrl = item.url;
-                        const parts = item.url.split('/');
-                        const resourceId = parts[parts.length - 1];
-
-                        storageUrl = `http://${authority}/wara/${resourceId}${item.key ? '#' + item.key : ''}`;
-
-                        // Identity Check
-                        if (item.uploaderWallet && media) {
+                        // Check existence based on this authority + SourceID + Wallet (Exact Replica check)
+                        // Note: We need media to be defined to match sourceId. If no media, we can't reliably match by content ID here.
+                        if (media) {
+                            const m = media;
                             existingLink = await this.prisma.link.findFirst({
                                 where: {
-                                    sourceId: media.sourceId,
-                                    source: media.source,
+                                    url: storageAuthority,
+                                    sourceId: m.sourceId,
                                     uploaderWallet: item.uploaderWallet
                                 }
                             });
                         } else {
-                            existingLink = await this.prisma.link.findFirst({ where: { url: storageUrl } });
+                            // Fallback: If we don't have media metadata yet, try to match by URL only?
+                            // Or just skip exact matching.
+                            existingLink = await this.prisma.link.findFirst({
+                                where: { url: storageAuthority }
+                            });
+                        }
+
+                        if (!existingLink) {
+                            // If not found, check loosely by uploader wallet and content to see if we need to update the host
+                            if (item.uploaderWallet && media) {
+                                const mn = media;
+                                existingLink = await this.prisma.link.findFirst({
+                                    where: {
+                                        sourceId: mn.sourceId,
+                                        source: mn.source,
+                                        uploaderWallet: item.uploaderWallet
+                                    }
+                                });
+                            }
                         }
 
                         if (existingLink) {
-                            // UPDATE: Ensure virtual schema
-                            if (existingLink.url !== storageUrl) {
+                            // UPDATE: Ensure virtual schema (Host Authority)
+                            if (existingLink.url !== storageAuthority) {
                                 await this.prisma.link.update({
                                     where: { id: existingLink.id },
-                                    data: { url: storageUrl }
+                                    data: { url: storageAuthority }
                                 });
                                 // console.log(`[Sync] Updated Link Schema for ${item.title}`);
                             }
                         } else if (media) {
-                            // CREATE with Virtual URL
+                            // CREATE with Virtual URL (Host Authority)
+                            // Note: 'item' details (metadata) are preserved
                             await this.prisma.link.create({
                                 data: {
-                                    url: storageUrl, // Virtual URL (Sentinel-ready)
+                                    url: storageAuthority, // Stores Host ID
                                     title: item.title || `[P2P] ${media.title}`,
                                     waraId: media.waraId,
                                     source: media.source,

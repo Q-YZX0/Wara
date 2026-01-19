@@ -181,63 +181,142 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
         if (!q) return res.json([]);
 
         try {
-            // 1. Search Local DB (Collective Registry: On-Chain + Synced)
+            // 1. Search TMDB (Primary Discovery)
+            let results: any[] = [];
+            if (process.env.TMDB_API_KEY) {
+                try {
+                    results = await searchTMDB(q);
+                } catch (e) { console.error("TMDB Search Error", e); }
+            }
+
+            // 2. Search Local DB (Fallback/Supplement)
+            // Useful for offline mode or content not in TMDB
             const localResults = await node.prisma.media.findMany({
-                where: {
-                    OR: [
-                        { title: { contains: q } },
-                    ]
-                },
+                where: { title: { contains: q } },
                 take: 20
             });
 
-            // 2. Search TMDB (Discovery - Optional)
-            let tmdbResults = [];
-            if (process.env.TMDB_API_KEY) {
-                tmdbResults = await searchTMDB(q);
-            }
+            // 3. Merge & Deduplicate (Source of Truth: TMDB + Local Overlay)
+            const resultMap = new Map<string, any>();
 
-            // 3. Merge & Deduplicate
-            const combinedMap = new Map();
+            // Add TMDB entries first
+            results.forEach((m: any) => {
+                resultMap.set(`${m.source}:${m.sourceId}`, { ...m, origin: 'tmdb' });
+            });
 
-            // Add TMDB first as base discovery
-            tmdbResults.forEach((m: any) => combinedMap.set(`${m.source}:${m.sourceId}`, m));
-
-            // Overlay Local (Wara Network data is the Truth)
+            // Add/Overlay Local entries
             localResults.forEach(m => {
-                combinedMap.set(`${m.source}:${m.sourceId}`, {
-                    ...m,
-                    isFromNetwork: true,
-                    isApproved: true, // Results from local sync/P2P are approved
-                });
+                const key = `${m.source}:${m.sourceId}`;
+                const existing = resultMap.get(key);
+                // If exists in TMDB, we just ensure we have the waraId attached for later logic
+                // If not, we add it as a local-only result
+                if (existing) {
+                    resultMap.set(key, { ...existing, waraId: m.waraId });
+                } else {
+                    resultMap.set(key, { ...m, origin: 'local' });
+                }
             });
 
-            const finalResults = Array.from(combinedMap.values());
+            const mergedList = Array.from(resultMap.values());
 
-            // 5. Availability Check (Links)
-            const waraIds = finalResults.map((m: any) => m.waraId).filter(id => id);
-            const linksInNetwork = await node.prisma.link.findMany({
-                where: { waraId: { in: waraIds } },
-                select: { waraId: true }
+            // 4. Batch Enrichment: Get Status & Link Counts
+            const sourceIds = mergedList.map(m => m.sourceId);
+
+            // 4a. Fetch Exact Media Status (Match by ID to be sure)
+            const existingMedia = await node.prisma.media.findMany({
+                where: {
+                    sourceId: { in: sourceIds },
+                    source: 'tmdb'
+                }
             });
-            const availableWaraIds = new Set(linksInNetwork.map(l => l.waraId));
 
-            const movies = finalResults.map((m: any) => ({
-                base: m,
-                isAvailable: availableWaraIds.has(m.waraId)
-            }));
-            res.json(movies);
+            // 4b. Fetch Link Counts
+            const linkCounts = await node.prisma.link.groupBy({
+                by: ['sourceId'],
+                where: { sourceId: { in: sourceIds } },
+                _count: { id: true }
+            });
+
+            // 5. Build Final Response with Local State Flags
+            const enrichedResults = mergedList.map(item => {
+                // Find matching DB entry (Priority: Exact ID match)
+                const dbEntry = existingMedia.find(m => m.sourceId === item.sourceId)
+                    || localResults.find(m => m.sourceId === item.sourceId);
+
+                const linkStats = linkCounts.find(l => l.sourceId === item.sourceId);
+                const count = linkStats ? linkStats._count.id : 0;
+
+                return {
+                    base: {
+                        ...item,
+                        waraId: dbEntry ? dbEntry.waraId : item.waraId,
+                        status: dbEntry ? dbEntry.status : item.status,
+                    },
+                    isAvailable: count > 0,
+                    localState: {
+                        registered: !!dbEntry,
+                        status: dbEntry ? dbEntry.status : null,
+                        linkCount: count,
+                        isPlayable: count > 0,
+                    }
+                };
+            });
+
+            res.json(enrichedResults);
         } catch (e: any) {
             console.error("Search Error", e);
             res.status(500).json({ error: e.message });
         }
     });
 
-    // GET /api/catalog/requests
+    // GET /api/catalog/unverified (Community Uploads - Playable but not DAO Approved)
+    app.get('/api/catalog/unverified', async (req: Request, res: Response) => {
+        console.log(`[Catalog] GET /unverified Request received. Query:`, req.query);
+        const genre = req.query.genre as string;
+        try {
+            // 1. Find all links first (Source of Truth for Availability)
+            const allLinks = await node.prisma.link.findMany({
+                distinct: ['sourceId'],
+                select: { sourceId: true }
+            });
+            const availableSourceIds = allLinks.map(l => l.sourceId);
+
+            if (availableSourceIds.length === 0) {
+                console.log(`[Catalog] /unverified: No links found in DB.`);
+                return res.json([]);
+            }
+
+            // 2. Find Media that MATCHES these links but is NOT approved
+            const unverifiedMedia = await node.prisma.media.findMany({
+                where: {
+                    sourceId: { in: availableSourceIds },
+                    status: { not: 'approved' },
+                    ...(genre ? { genre: { contains: genre } } : {})
+                },
+                take: 50,
+                orderBy: { createdAt: 'desc' }
+            });
+
+            const movies = unverifiedMedia.map(m => ({ base: m, isAvailable: true }));
+            res.json(movies);
+        } catch (e: any) {
+            res.status(500).json({ error: e.message });
+        }
+    });
+
+    // GET /api/catalog/requests (Requested but NO content available yet)
     app.get('/api/catalog/requests', async (req: Request, res: Response) => {
         const genre = req.query.genre as string;
         try {
-            const allMedia = await node.prisma.media.findMany({
+            // 1. Find all links to EXCLUDE them
+            const allLinks = await node.prisma.link.findMany({
+                distinct: ['sourceId'],
+                select: { sourceId: true }
+            });
+            const availableSourceIds = new Set(allLinks.map(l => l.sourceId));
+
+            // 2. Find Media requested
+            const requestedMedia = await node.prisma.media.findMany({
                 where: {
                     ...(genre ? { genre: { contains: genre } } : {}),
                     OR: [
@@ -249,15 +328,9 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
                 orderBy: { requestCount: 'desc' }
             });
 
-            const sourceIds = allMedia.map(m => m.sourceId);
-            const linksInNetwork = await node.prisma.link.findMany({
-                where: { sourceId: { in: sourceIds } },
-                select: { sourceId: true }
-            });
-            const availableIds = new Set(linksInNetwork.map(l => l.sourceId));
-
-            const movies = allMedia
-                .filter(m => !availableIds.has(m.sourceId))
+            // 3. Filter out anything that is already available
+            const movies = requestedMedia
+                .filter(m => !availableSourceIds.has(m.sourceId))
                 .map(m => ({ base: m, isAvailable: false }));
 
             res.json(movies);
@@ -288,37 +361,24 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
                     console.warn(`[Catalog] Registry check failed: ${e.message}`);
                 }
 
-                if (!onChain) {
-                    // 1.1 Check Ownership Soberana (If signed)
-                    let isContractOwner = false;
-                    if (signer) {
-                        try {
-                            const ownerAddress = await node.mediaRegistry.owner();
-                            isContractOwner = (signer.address.toLowerCase() === ownerAddress.toLowerCase());
-                        } catch (e) {
-                            console.warn("[Catalog] Could not verify contract ownership.");
-                        }
-                    }
+                // Fetch Metadata locally first to have the data ready for registration
+                // We default to 'pending_dao' since we don't know the status yet if not on chain
+                const media = await getMediaMetadata(node.prisma, String(finalSourceId), String(type), 'pending_dao', node, String(source));
 
-                    const statusTarget = isContractOwner ? 'approved' : 'pending_dao';
-
-                    // Fetch/Propose Metadata
-                    console.log(`[Catalog] Request triggered Lazy Registration/Proposal for ${finalSourceId} (${statusTarget})`);
-                    const media = await getMediaMetadata(node.prisma, String(finalSourceId), String(type), statusTarget, node, String(source));
-
-                    if (media && isContractOwner && signer) {
-                        try {
-                            console.log(`[Web3] Blessing: Officially registering ${media.title} by Owner.`);
-                            const registryWrite = node.mediaRegistry.connect(signer);
-                            await (registryWrite as any).registerMedia(
-                                String(media.source),
-                                String(media.sourceId),
-                                media.title,
-                                media.waraId
-                            );
-                        } catch (e: any) {
-                            console.warn(`[Web3] Blessing failed (Chain unreachable): ${e.message}`);
-                        }
+                if (!onChain && media) {
+                    // 1.1 Universal Request Registration (Proposal)
+                    try {
+                        console.log(`[Web3] Registering Requested Media on-chain: ${media.title}`);
+                        const registryWrite = node.mediaRegistry.connect(signer);
+                        const tx = await (registryWrite as any).registerMedia(
+                            String(media.source),
+                            String(media.sourceId),
+                            media.title,
+                            media.waraId
+                        );
+                        console.log(`[Web3] Request TX Sent: ${tx.hash}`);
+                    } catch (e: any) {
+                        console.warn(`[Web3] Request registration failed: ${e.message}`);
                     }
                 }
             }

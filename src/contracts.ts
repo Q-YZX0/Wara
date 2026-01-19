@@ -93,6 +93,7 @@ export const MEDIA_REGISTRY_ADDRESS = "0x3A142e0b15DB9b775ABd93e79aff1D7A758d134
 export const WARA_AIRDROP_ADDRESS = "0xc6FD86f27Fca876B9A0b8405F487bf0d1844e4e5";
 export const WARA_DAO_ADDRESS = "0xA3E2fA06233E5e6E30FFbE6887CEBed74465014b";
 export const WARA_VESTING_ADDRESS = "0xa171B6b7136C272C12426ffa3D6b9c91750c8a5d";
+export const WARA_ORACLE_ADDRESS = "0xAcB6136e17b0ca438Af08e26Fbc2F80CC52fCF95"; // Placeholder, se actualizará tras deploy
 
 export const WARA_AIRDROP_ABI = [
     "function register() external",
@@ -112,6 +113,13 @@ export const WARA_DAO_ABI = [
     "function executeProposal(uint256 pId) external",
     "function nextProposalId() external view returns (uint256)",
     "function proposals(uint256 id) external view returns (uint256 id, string description, address recipient, uint256 amount, uint8 pType, uint256 upvotes, uint256 downvotes, uint256 deadline, bool executed, bool approved)"
+];
+
+export const WARA_ORACLE_ABI = [
+    "function submitPrice(int256 _price, uint256 _timestamp, bytes[] calldata _signatures) external",
+    "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
+    "function decimals() external view returns (uint8)",
+    "function owner() external view returns (address)"
 ];
 
 

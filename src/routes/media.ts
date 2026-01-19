@@ -247,7 +247,19 @@ export const setupMediaRoutes = (node: WaraNode) => {
             const media = await node.prisma.media.findUnique({ where: { waraId } });
             if (!media) return res.status(404).json({ error: "Media not found locally" });
 
-            // 2. Query On-Chain Proposal
+            // CRITICAL FIX: If already approved locally, trust it. 
+            // This prevents zombie proposals (unresolved on-chain) from overriding the approved status in UI.
+            if (media.status === 'approved') {
+                return res.json({
+                    waraId,
+                    status: 'approved',
+                    onChain: true,
+                    votes: { up: 0, down: 0, total: 0 },
+                    period: { isOpen: false, remainingHours: 0 }
+                });
+            }
+
+            // 2. Query On-Chain Proposal (Only if not locally approved)
             // Check if active (registered)
             const mediaData = await registry.getMedia(waraId).catch(() => null);
             if (mediaData && mediaData.id !== ethers.ZeroHash) {

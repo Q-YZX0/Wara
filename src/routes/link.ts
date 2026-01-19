@@ -32,45 +32,59 @@ export const setupLinkRoutes = (app: Express, node: WaraNode) => {
                 let resolvedUrl = link.url;
 
                 try {
-                    const url = new URL(link.url);
-                    const hostname = url.hostname;
+                    // NEW STANDARD: 'link.url' field contains the Host Authority ONLY (e.g., "salsa.wara", "0x123...", "192.168.1.50")
+                    const hostname = link.url;
                     const isIpAddress = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname === 'localhost';
 
                     if (isIpAddress) {
-                        // If it's an IP, check if it's our own public IP (NAT Loopback fix)
-                        // ONLY replace with localhost if the requester is also local
+                        // 1. IP Authority
+                        // NAT Loopback Fix: If it's my own public IP and I am requesting locally, switch to localhost
                         if (hostname === node.publicIp && isLocalRequest) {
-                            resolvedUrl = link.url.replace(`${url.protocol}//${url.host}`, `http://localhost:${node.port}`);
+                            resolvedUrl = `http://localhost:${node.port}/wara/${link.id}`;
+                        } else {
+                            // Standard IP Construction
+                            resolvedUrl = `http://${hostname}:${node.port}/wara/${link.id}`;
                         }
                     } else {
-                        // Hostname is nodeName or nodeAddress, need to resolve
+                        // 2. Named Authority (muggi.wara, 0x123...)
                         const identifier = hostname;
                         const nodeAny = node as any;
 
-                        // Check if it's the local node
+                        // Check if it IS my own identity
                         const isLocalByName = identifier.includes('.wara') && nodeAny.nodeName && identifier === nodeAny.nodeName;
                         const isLocalByAddress = identifier.startsWith('0x') && nodeAny.nodeAddress && nodeAny.nodeAddress.toLowerCase() === identifier.toLowerCase();
 
                         if (isLocalByName || isLocalByAddress) {
                             // Local link -> use localhost OR Public IP depending on requester
                             const targetBase = isLocalRequest ? `localhost:${node.port}` : `${node.publicIp}:${node.port}`;
-                            resolvedUrl = link.url.replace(`${url.protocol}//${url.host}`, `http://${targetBase}`);
+                            resolvedUrl = `http://${targetBase}/wara/${link.id}`;
                         } else {
-                            // Remote link -> resolve to IP (for frontend to fetch)
-                            // Search in knownPeers first
+                            // Remote Named Link -> Resolve via Peer Table
+                            let resolvedEndpoint = null;
+
+                            // Iterate known peers to find the IP associated with this Authority Name
                             for (const [peerName, peer] of node.knownPeers.entries()) {
                                 const matchByName = identifier.includes('.wara') && peerName === identifier;
                                 const matchByAddress = identifier.startsWith('0x') && peer.nodeAddress && peer.nodeAddress.toLowerCase() === identifier.toLowerCase();
 
                                 if (matchByName || matchByAddress) {
-                                    resolvedUrl = link.url.replace(`${url.protocol}//${url.host}`, peer.endpoint);
+                                    resolvedEndpoint = peer.endpoint;
                                     break;
                                 }
+                            }
+
+                            if (resolvedEndpoint) {
+                                // Peer Found: Construct proper endpoint URL
+                                resolvedUrl = `${resolvedEndpoint}/wara/${link.id}`;
+                            } else {
+                                // Peer Not Found / Offline:
+                                // Fallback: Try to resolve DNS-like if possible (e.g. .local), otherwise broken link until peer syncs.
+                                resolvedUrl = `http://${hostname}/wara/${link.id}`;
                             }
                         }
                     }
                 } catch (e) {
-                    // Invalid URL, keep as-is
+                    // unexpected error
                 }
 
                 return { ...link, url: resolvedUrl };
@@ -167,7 +181,7 @@ export const setupLinkRoutes = (app: Express, node: WaraNode) => {
                 }
             }
 
-            // 2. Sovereign Media Registration (Lazy Flow)
+            // 2. Sovereign Media Registration (Universal Proposal Flow)
             if (node.mediaRegistry) {
                 let onChain = false;
                 try {
@@ -177,19 +191,30 @@ export const setupLinkRoutes = (app: Express, node: WaraNode) => {
                     console.warn(`[Web3] Registry check failed: ${e.message}`);
                 }
 
-                if (!onChain && isContractOwner) {
+                // If not on chain, ANY uploader registers it (Proposal/PendingDAO logic)
+                if (!onChain) {
                     try {
-                        console.log(`[Web3] Blessing: Content ${sourceId} officially registered by Owner.`);
+                        console.log(`[Web3] Registering Media Identity on-chain for ${sourceId}...`);
                         const registryWrite = node.mediaRegistry.connect(signer);
+
+                        // Registering as a standard user creates a "Proposed" entry
+                        // The smart contract logic handles the 'isOwner' check internally for status assignment
                         const tx = await (registryWrite as any).registerMedia(
                             String(media.source),
                             String(media.sourceId),
                             media.title,
                             media.waraId // Hash
                         );
-                        await tx.wait();
+
+                        console.log(`[Web3] Media Registration TX Sent: ${tx.hash}. Waiting for confirmation...`);
+                        await tx.wait(); // CRITICAL: Wait for Media Identity to be mined before registering Link
+                        console.log(`[Web3] Media Identity Confirmed.`);
+
                     } catch (e: any) {
-                        console.warn(`[Web3] Blessing failed: ${e.message}`);
+                        console.warn(`[Web3] Media Registration failed: ${e.message}`);
+                        // If media registration fails (e.g. reverted because someone else just did it), we might want to continue?
+                        // But if it failed because of gas/network, Link registration will likely fail too. 
+                        // We proceed cautiously.
                     }
                 }
             }
@@ -244,9 +269,9 @@ export const setupLinkRoutes = (app: Express, node: WaraNode) => {
                 }
 
                 const activeSigner = signer.provider ? signer : signer.connect(node.provider);
-                const reputation = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, activeSigner);
+                const linkRegistry = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, activeSigner);
 
-                const tx = await reputation.registerLink(contentHash, media.waraId, salt, finalUploaderWallet);
+                const tx = await linkRegistry.registerLink(contentHash, media.waraId, salt, finalUploaderWallet);
                 txHash = tx.hash;
             } catch (err: any) {
                 console.error("[Web3] Auto-Registration Failed:", err.message);
@@ -336,11 +361,11 @@ export const setupLinkRoutes = (app: Express, node: WaraNode) => {
 
                 if (!signer) return res.status(401).json({ error: 'Signer disappeared' });
                 const activeSigner = signer.provider ? signer : signer.connect(node.provider);
-                const reputation = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, activeSigner);
+                const linkRegistry = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, activeSigner);
 
                 console.log(`[Web3] Sending registerLink TX. Hoster: ${hoster}, MediaHash: ${mHash}`);
                 // registerLink(contentHash, mediaHash, salt, hoster)
-                const tx = await reputation.registerLink(cHash, mHash, s, hoster);
+                const tx = await linkRegistry.registerLink(cHash, mHash, s, hoster);
 
                 return res.json({ success: true, txHash: tx.hash });
             }
