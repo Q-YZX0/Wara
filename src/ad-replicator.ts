@@ -49,7 +49,7 @@ export class AdReplicator {
     async getKnownNodes(): Promise<string[]> {
         try {
             // Query local node's /peers endpoint to get gossip network
-            const response = await axios.get(`http://127.0.0.1:${this.localPort}/peers`, { timeout: 5000 });
+            const response = await axios.get(`http://127.0.0.1:${this.localPort}/api/network/peers`, { timeout: 5000 });
             const peers = response.data as Array<{ name: string, endpoint: string }>;
 
             // Extract endpoints + add localhost

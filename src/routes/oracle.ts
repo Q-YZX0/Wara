@@ -1,15 +1,16 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
 import { ethers } from 'ethers';
 import { WARA_ORACLE_ADDRESS, WARA_ORACLE_ABI } from '../contracts';
 
-export const setupOracleRoutes = (app: Express, node: WaraNode) => {
+export const setupOracleRoutes = (node: WaraNode) => {
+    const router = Router();
 
     /**
-     * POST /oracle/notify
+     * POST /api/oracle/notify
      * Recibe notificación del Centinela cuando este nodo es elegido como Juez
      */
-    app.post('/oracle/notify', async (req: Request, res: Response) => {
+    router.post('/notify', async (req: Request, res: Response) => {
         const { cycleId, yourRank, judges, startTime, signature } = req.body;
 
         if (!node.nodeSigner) {
@@ -50,16 +51,16 @@ export const setupOracleRoutes = (app: Express, node: WaraNode) => {
             res.json({ success: true });
 
         } catch (e: any) {
-            console.error('[Oracle] Error en /oracle/notify:', e.message);
+            console.error('[Oracle] Error en api/oracle/notify:', e.message);
             res.status(500).json({ error: e.message });
         }
     });
 
     /**
-     * POST /oracle/sign-price
+     * POST /api/oracle/sign-price
      * Firma el precio como miembro del Jurado
      */
-    app.post('/oracle/sign-price', async (req: Request, res: Response) => {
+    router.post('/sign-price', async (req: Request, res: Response) => {
         const { cycleId, price, timestamp } = req.body;
 
         if (!node.nodeSigner) {
@@ -103,8 +104,10 @@ export const setupOracleRoutes = (app: Express, node: WaraNode) => {
             });
 
         } catch (e: any) {
-            console.error('[Oracle] Error en /oracle/sign-price:', e.message);
+            console.error('[Oracle] Error en api/oracle/sign-price:', e.message);
             res.status(500).json({ error: e.message });
         }
     });
+
+    return router;
 };

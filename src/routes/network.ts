@@ -1,11 +1,11 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
 
 //Organizar endpoints
-export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
-
+export const setupNetworkRoutes = (node: WaraNode) => {
+    const router = Router();
     // GET /identity (Expose technical wallet for voting rewards)
-    app.get('/api/network/identity', (req: Request, res: Response) => {
+    router.get('/identity', (req: Request, res: Response) => {
         if (!node.nodeSigner) return res.status(500).json({ error: 'Node identity not initialized' });
         res.json({
             nodeAddress: node.nodeSigner.address,
@@ -15,7 +15,7 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
     });
 
     // --- Gossip / Discovery (Phonebook) ---
-    app.get('/peers', async (req: Request, res: Response) => {
+    router.get('/peers', async (req: Request, res: Response) => {
         // Return my own info + everyone I know
         const peers = Array.from(node.knownPeers.entries()).map(([name, data]) => ({
             name,
@@ -43,7 +43,7 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
     });
 
     // Receive gossip from others
-    app.post('/gossip', (req: Request, res: Response) => {
+    router.post('/gossip', (req: Request, res: Response) => {
         const { peers } = req.body; // Array of {name, endpoint}
         if (Array.isArray(peers)) {
             let newPeers = 0;
@@ -72,7 +72,7 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/network/connect - Manual Sentinel Connection (Unified)
-    app.post('/api/network/connect', async (req: Request, res: Response) => {
+    router.post('/connect', async (req: Request, res: Response) => {
         const { target } = req.body; // Can be "salsa.muggi" or "http://IP:PORT"
 
         if (!target) return res.status(400).json({ error: 'Target required (name or url)' });
@@ -88,7 +88,7 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
             endpoint = target;
             console.log(`[Network] Target detected as URL: ${endpoint}. Finding name...`);
             try {
-                const resPeers = await fetch(`${endpoint}/peers`).then(r => r.json());
+                const resPeers = await fetch(`${endpoint}/api/network/peers`).then(r => r.json());
                 const self = Array.isArray(resPeers) ? resPeers.find((p: any) => p.endpoint && (p.endpoint.includes(endpoint!) || endpoint!.includes(p.endpoint))) : null;
                 if (self && self.name) {
                     name = self.name;
@@ -125,59 +125,12 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
-    // GET /api/nodes/resolve?address=0x... - Resolve wallet address to node URL
-    app.get('/api/nodes/resolve', async (req: Request, res: Response) => {
-        const { address } = req.query;
-        if (!address) return res.status(400).json({ error: 'Missing address' });
-
-        try {
-            const searchAddress = String(address).toLowerCase();
-
-            // 1. Check if it's the local node owner
-            const nodeAny = node as any;
-            if (nodeAny.nodeOwner && nodeAny.nodeOwner.toLowerCase() === searchAddress) {
-                const publicIp = nodeAny.publicIp || 'localhost';
-                return res.json({ url: `http://${publicIp}:${node.port}` });
-            }
-
-            // 2. Check if we have links hosted by this address
-            const link = await node.prisma.link.findFirst({
-                where: {
-                    OR: [
-                        { uploaderWallet: searchAddress },
-                        { waraMetadata: { contains: searchAddress } } // Check if hosterAddress is in metadata
-                    ]
-                }
-            });
-
-            if (link) {
-                // This link is hosted locally
-                const publicIp = nodeAny.publicIp || 'localhost';
-                return res.json({ url: `http://${publicIp}:${node.port}` });
-            }
-
-            // 3. Not found - could query blockchain registry here in future
-            res.status(404).json({ error: 'Node URL not found for this address' });
-        } catch (e: any) {
-            res.status(500).json({ error: e.message });
-        }
-    });
-
-    // GET /api/network/peers - Get list of known peers for gossip
-    app.get('/api/network/peers', (req: Request, res: Response) => {
-        const peers = Array.from(node.knownPeers.entries()).map(([name, peer]) => ({
-            name,
-            url: peer.endpoint
-        }));
-        res.json({ peers });
-    });
-
     // --- Tracker Management ---
-    app.get('/api/network/trackers', (req: Request, res: Response) => {
+    router.get('/trackers', (req: Request, res: Response) => {
         res.json({ trackers: node.getTrackers() });
     });
 
-    app.post('/api/network/trackers', (req: Request, res: Response) => {
+    router.post('/trackers', (req: Request, res: Response) => {
         const { url } = req.body;
         if (!url) return res.status(400).json({ error: 'Missing tracker URL' });
 
@@ -185,7 +138,7 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
         res.json({ success: true, trackers: node.getTrackers() });
     });
 
-    app.delete('/api/network/trackers', (req: Request, res: Response) => {
+    router.delete('/trackers', (req: Request, res: Response) => {
         const { url } = req.query;
         if (!url) return res.status(400).json({ error: 'Missing tracker URL' });
 
@@ -198,7 +151,7 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
     // ==========================================
 
     // POST /rpc-proxy (Handle JSON-RPC requests from fellow nodes)
-    app.post('/rpc-proxy', async (req: Request, res: Response) => {
+    router.post('/rpc-proxy', async (req: Request, res: Response) => {
         // Simple Guard: No userSigner? No Proxy.
         // We could add more complex auth based on on-chain subscription later.
 
@@ -225,7 +178,7 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /api/network/rpcs (List of community RPC endpoints)
-    app.get('/api/network/rpcs', (req: Request, res: Response) => {
+    router.get('/rpcs', (req: Request, res: Response) => {
         const communityList = [
             'https://eth-sepolia.public.blastapi.io',
             'https://rpc.ankr.com/eth_sepolia',
@@ -235,11 +188,13 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
         // Add peers that are providing RPC service
         const peersProvidingRpc = Array.from(node.knownPeers.values())
             .filter(p => p.isTrusted) // Only trust verified nodes
-            .map(p => `${p.endpoint}/rpc-proxy`);
+            .map(p => `${p.endpoint}/api/network/rpc-proxy`);
 
         res.json({
             default: communityList,
             community: peersProvidingRpc
         });
     });
+
+    return router;
 };

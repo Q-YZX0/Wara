@@ -43,7 +43,7 @@ export class PriceOracleService {
     }
 
     /**
-     * Called by /oracle/notify endpoint when this node is assigned as Judge
+     * Called by /api/oracle/notify endpoint when this node is assigned as Judge
      */
     public async setJudgeAssignment(cycleId: number, rank: number, judges: any[], startTime: number) {
         this.currentAssignment = { cycleId, rank, judges, startTime };
@@ -126,7 +126,7 @@ export class PriceOracleService {
                 try {
                     const endpoint = jurorIP.startsWith('http') ? jurorIP : `http://${jurorIP}`;
 
-                    const res = await axios.post(`${endpoint}/oracle/sign-price`, {
+                    const res = await axios.post(`${endpoint}/api/oracle/sign-price`, {
                         cycleId,
                         price,
                         timestamp

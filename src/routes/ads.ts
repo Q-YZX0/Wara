@@ -1,16 +1,17 @@
-import { Express, Request, Response } from 'express';
-import { WaraNode } from '../node'; // Assuming node.ts is in parent dir
+import { Router, Request, Response } from 'express';
+import { WaraNode } from '../node';
+import { ethers } from 'ethers'; // Assuming node.ts is in parent dir
+import { AD_MANAGER_ABI, AD_MANAGER_ADDRESS, WARA_TOKEN_ADDRESS, ERC20_ABI } from '../contracts';
 
-export const setupAdsRoutes = (app: Express, node: WaraNode) => {
-
+export const setupAdsRoutes = (node: WaraNode) => {
+    const router = Router();
     // GET /api/ads/my-campaigns?wallet=0x...
-    app.get('/api/ads/my-campaigns', async (req: Request, res: Response) => {
+    router.get('/my-campaigns', async (req: Request, res: Response) => {
         const wallet = req.query.wallet as string;
         if (!wallet) return res.json([]);
 
         try {
-            const { ethers } = await import('ethers');
-            const { AD_MANAGER_ABI, AD_MANAGER_ADDRESS } = await import('../contracts');
+
             const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
             const contract = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, provider);
 
@@ -39,11 +40,9 @@ export const setupAdsRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /api/ads/cost?duration=15
-    app.get('/api/ads/cost', async (req: Request, res: Response) => {
+    router.get('/cost', async (req: Request, res: Response) => {
         try {
             const duration = Number(req.query.duration || 15);
-            const { ethers } = await import('ethers');
-            const { AD_MANAGER_ABI, AD_MANAGER_ADDRESS } = await import('../contracts');
             const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
             const contract = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, provider);
 
@@ -56,14 +55,11 @@ export const setupAdsRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/ads/create
-    app.post('/api/ads/create', async (req: Request, res: Response) => {
+    router.post('/create', async (req: Request, res: Response) => {
         const { wallet, budget, duration, videoHash, category } = req.body;
         if (!wallet || !budget || !videoHash) return res.status(400).json({ error: "Missing params" });
 
         try {
-            const { ethers } = await import('ethers');
-            const { AD_MANAGER_ABI, AD_MANAGER_ADDRESS, WARA_TOKEN_ADDRESS, ERC20_ABI } = await import('../contracts');
-
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
 
             const token = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, userSigner);
@@ -89,11 +85,9 @@ export const setupAdsRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/ads/cancel
-    app.post('/api/ads/cancel', async (req: Request, res: Response) => {
+    router.post('/cancel', async (req: Request, res: Response) => {
         const { wallet, id } = req.body;
         try {
-            const { ethers } = await import('ethers');
-            const { AD_MANAGER_ABI, AD_MANAGER_ADDRESS } = await import('../contracts');
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
             const manager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, userSigner);
 
@@ -106,11 +100,9 @@ export const setupAdsRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/ads/toggle-pause
-    app.post('/api/ads/toggle-pause', async (req: Request, res: Response) => {
+    router.post('/toggle-pause', async (req: Request, res: Response) => {
         const { wallet, id } = req.body;
         try {
-            const { ethers } = await import('ethers');
-            const { AD_MANAGER_ABI, AD_MANAGER_ADDRESS } = await import('../contracts');
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
             const manager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, userSigner);
 
@@ -123,11 +115,9 @@ export const setupAdsRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/ads/report
-    app.post('/api/ads/report', async (req: Request, res: Response) => {
+    router.post('/report', async (req: Request, res: Response) => {
         const { wallet, id, reason } = req.body;
         try {
-            const { ethers } = await import('ethers');
-            const { AD_MANAGER_ABI, AD_MANAGER_ADDRESS } = await import('../contracts');
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
             const manager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, userSigner);
 
@@ -143,11 +133,9 @@ export const setupAdsRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/ads/topup
-    app.post('/api/ads/topup', async (req: Request, res: Response) => {
+    router.post('/topup', async (req: Request, res: Response) => {
         const { wallet, id, amount } = req.body;
         try {
-            const { ethers } = await import('ethers');
-            const { AD_MANAGER_ABI, AD_MANAGER_ADDRESS, WARA_TOKEN_ADDRESS, ERC20_ABI } = await import('../contracts');
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
 
             const token = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, userSigner);
@@ -168,4 +156,5 @@ export const setupAdsRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
+    return router;
 };

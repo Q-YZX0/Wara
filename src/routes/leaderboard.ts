@@ -1,9 +1,10 @@
-import { Express } from 'express';
+import { Router } from 'express';
 import { WaraNode } from '../node';
 
-export const setupLeaderboardRoutes = (app: Express, node: WaraNode) => {
+export const setupLeaderboardRoutes = (node: WaraNode) => {
+    const router = Router();
     // GET /api/leaderboard/content - Top Ranked Links
-    app.get('/api/leaderboard/content', async (req, res) => {
+    router.get('/content', async (req, res) => {
         try {
             // Fetch top 50 links by trust score
             const links = await node.prisma.link.findMany({
@@ -41,4 +42,5 @@ export const setupLeaderboardRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
+    return router;
 };

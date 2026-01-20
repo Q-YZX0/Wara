@@ -1,9 +1,10 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
 
-export const setupRemoteRoutes = (app: Express, node: WaraNode) => {
+export const setupRemoteRoutes = (node: WaraNode) => {
+    const router = Router();
     // GET /api/remote-nodes
-    app.get('/api/remote-nodes', async (req: Request, res: Response) => {
+    router.get('/api/remote-nodes', async (req: Request, res: Response) => {
         const { userId } = req.query;
         if (!userId) return res.status(400).json({ error: 'Missing userId' });
         try {
@@ -15,7 +16,7 @@ export const setupRemoteRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/remote-nodes
-    app.post('/api/remote-nodes', async (req: Request, res: Response) => {
+    router.post('/api/remote-nodes', async (req: Request, res: Response) => {
         const { userId, url, nodeKey, name, password } = req.body;
         if (!userId || !url) return res.status(400).json({ error: 'Missing userId or url' });
 
@@ -49,7 +50,7 @@ export const setupRemoteRoutes = (app: Express, node: WaraNode) => {
     });
 
     // DELETE /api/remote-nodes
-    app.delete('/api/remote-nodes', async (req: Request, res: Response) => {
+    router.delete('/api/remote-nodes', async (req: Request, res: Response) => {
         const { nodeId, userId } = req.query;
         if (!nodeId || !userId) return res.status(400).json({ error: 'Missing parameters' });
         try {
@@ -61,7 +62,7 @@ export const setupRemoteRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/remote-nodes/decrypt
-    app.post('/api/remote-nodes/decrypt', async (req: Request, res: Response) => {
+    router.post('/api/remote-nodes/decrypt', async (req: Request, res: Response) => {
         const { nodeId, userId, password } = req.body;
         if (!nodeId || !userId || !password) return res.status(400).json({ error: 'Missing parameters or password' });
 
@@ -86,4 +87,6 @@ export const setupRemoteRoutes = (app: Express, node: WaraNode) => {
             res.status(500).json({ error: 'Failed to fetch key' });
         }
     });
+
+    return router;
 };

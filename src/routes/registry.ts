@@ -1,14 +1,15 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
 import { ethers } from 'ethers';
 import path from 'path';
 import fs from 'fs';
 
-export const setupRegistryRoutes = (app: Express, node: WaraNode) => {
+export const setupRegistryRoutes = (node: WaraNode) => {
+    const router = Router();
     // --- Blockchain Identity Endpoints (Muggi Registry) ---
 
     // POST /api/registry/register
-    app.post('/api/registry/register', async (req, res) => {
+    router.post('/register', async (req, res) => {
         const { name } = req.body;
         const authToken = req.headers['x-wara-token'] as string;
 
@@ -104,7 +105,7 @@ export const setupRegistryRoutes = (app: Express, node: WaraNode) => {
     });
 
     // Get registration fee
-    app.get('/api/registry/registration-fee', async (req: Request, res: Response) => {
+    router.get('/registration-fee', async (req: Request, res: Response) => {
         try {
             const baseFee = await node.registryContract.registrationFee();
             const feeData = await node.provider.getFeeData();
@@ -134,7 +135,7 @@ export const setupRegistryRoutes = (app: Express, node: WaraNode) => {
         }
     });
     // Check if a .wara name exists
-    app.get('/api/registry/name-exists/:name', async (req: Request, res: Response) => {
+    router.get('/name-exists/:name', async (req: Request, res: Response) => {
         try {
             const name = req.params.name.replace('.wara', '');
             const exists = await node.registryContract.nameExists(name);
@@ -146,7 +147,7 @@ export const setupRegistryRoutes = (app: Express, node: WaraNode) => {
     });
 
     // Get info for any registered node
-    app.get('/api/registry/node-info/:name', async (req: Request, res: Response) => {
+    router.get('/node-info/:name', async (req: Request, res: Response) => {
         try {
             const name = req.params.name.replace('.wara', '');
             const info = await node.registryContract.getNode(name);
@@ -162,4 +163,6 @@ export const setupRegistryRoutes = (app: Express, node: WaraNode) => {
             res.status(500).json({ error: 'Node not found or registry error' });
         }
     });
+
+    return router;
 };

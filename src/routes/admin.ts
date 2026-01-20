@@ -1,14 +1,15 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
 import * as fs from 'fs';
 import * as path from 'path';
 import { createWaraLink } from '../index';
 import { WaraMap } from '../types';
 
-export const setupAdminRoutes = (app: Express, node: WaraNode) => {
+export const setupAdminRoutes = (node: WaraNode) => {
+    const router = Router();
 
     // POST /admin/publish
-    app.post('/admin/publish', node.requireAuth, async (req: Request, res: Response) => {
+    router.post('/publish', node.requireAuth, async (req: Request, res: Response) => {
         try {
             const { filePath, title, mediaInfo } = req.body;
             if (!filePath || !title) return res.status(400).json({ error: 'Missing filePath or title' });
@@ -35,7 +36,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /admin/import
-    app.post('/admin/import', node.requireAuth, async (req: Request, res: Response) => {
+    router.post('/import', node.requireAuth, async (req: Request, res: Response) => {
         console.log(`[WaraNode] INCOMING IMPORT REQUEST`);
         const filename = req.headers['x-filename'] as string || `upload_${Date.now()}.mp4`;
         const title = req.headers['x-title'] as string || filename;
@@ -89,7 +90,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
     });
 
     // --- Admin: Upload Subtitle ---
-    app.post('/admin/subtitle', node.requireAuth, (req: Request, res: Response) => {
+    router.post('/subtitle', node.requireAuth, (req: Request, res: Response) => {
         const linkId = req.headers['x-link-id'] as string;
         const lang = req.headers['x-lang'] as string;
         const label = req.headers['x-label'] as string;
@@ -147,7 +148,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /admin/peer
-    app.post('/admin/peer', node.requireAuth, (req: Request, res: Response) => {
+    router.post('/peer', node.requireAuth, (req: Request, res: Response) => {
         const { name, endpoint } = req.body;
         if (!name || !endpoint) return res.status(400).json({ error: 'Name and endpoint are required' });
 
@@ -157,7 +158,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /admin/status
-    app.get('/admin/status', node.requireAuth, async (req: Request, res: Response) => {
+    router.get('/status', node.requireAuth, async (req: Request, res: Response) => {
 
         // Force reload identity from disk to ensure consistency
         // This prevents the 'Register' form from reappearing if memory state was lost
@@ -233,13 +234,13 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /admin/catalog (Separated for performance)
-    app.get('/admin/catalog', node.requireAuth, async (req: Request, res: Response) => {
+    router.get('/catalog', node.requireAuth, async (req: Request, res: Response) => {
         const content = await node.getResolvedCatalog();
         res.json({ success: true, content });
     });
 
     // POST /admin/identity
-    app.post('/admin/identity', node.requireAuth, (req: Request, res: Response) => {
+    router.post('/identity', node.requireAuth, (req: Request, res: Response) => {
         const { name, nodeKey } = req.body;
         const idPath = path.join(node.dataDir, 'node_identity.json');
         if (fs.existsSync(idPath)) return res.status(403).json({ error: 'Node identity is locked.' });
@@ -258,7 +259,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /admin/identity
-    app.get('/admin/identity', node.requireAuth, (req: Request, res: Response) => {
+    router.get('/identity', node.requireAuth, (req: Request, res: Response) => {
         const idPath = path.join(node.dataDir, 'node_identity.json');
         if (fs.existsSync(idPath)) {
             const identity = JSON.parse(fs.readFileSync(idPath, 'utf-8'));
@@ -269,14 +270,14 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /admin/sync
-    app.post('/admin/sync', node.requireAuth, async (req: Request, res: Response) => {
+    router.post('/sync', node.requireAuth, async (req: Request, res: Response) => {
         const nodeAny = node as any;
         if (nodeAny.syncNetwork) nodeAny.syncNetwork();
         res.json({ success: true, message: 'Sync started' });
     });
 
     // POST /admin/trackers
-    app.post('/admin/trackers', node.requireAuth, (req: Request, res: Response) => {
+    router.post('/trackers', node.requireAuth, (req: Request, res: Response) => {
         const { trackers } = req.body;
         if (!Array.isArray(trackers)) return res.status(400).json({ error: 'trackers must be an array' });
 
@@ -292,46 +293,8 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
         res.json({ success: true, trackers: nodeAny.trackers });
     });
 
-    // --- NEW: Delete Endpoint ---
-    app.delete('/admin/delete/:id', node.requireAuth, async (req: Request, res: Response) => {
-        const { id } = req.params;
-        const link = node.links.get(id);
-
-        if (!link) {
-            return res.status(404).json({ error: "Link not found" });
-        }
-
-        try {
-            // 1. Remove from Memory
-            node.links.delete(id);
-
-            // 2. Remove Files
-            const waraPath = link.filePath;
-            const jsonPath = waraPath.replace('.wara', '.json');
-
-            if (fs.existsSync(waraPath)) fs.unlinkSync(waraPath);
-            if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
-
-            // 3. Cleanup Subtitles (Best effort)
-            const dir = path.dirname(waraPath);
-            const files = fs.readdirSync(dir);
-            for (const f of files) {
-                if (f.startsWith(`${id}_`)) { // id_subId.vtt
-                    try { fs.unlinkSync(path.join(dir, f)); } catch (e) { }
-                }
-            }
-
-            console.log(`[WaraNode] Deleted link: ${id}`);
-            res.json({ success: true });
-
-        } catch (e) {
-            console.error("Delete failed", e);
-            res.status(500).json({ error: "Failed to delete files" });
-        }
-    });
-
     // --- NEW: Mirror Endpoint (Replication) ---
-    app.post('/admin/mirror', node.requireAuth, async (req: Request, res: Response) => {
+    router.post('/mirror', node.requireAuth, async (req: Request, res: Response) => {
         try {
             const { outputUrl } = req.body; // e.g. "http://192.168.1.5:21746/stream/abc12345"
             if (!outputUrl) return res.status(400).json({ error: "Missing outputUrl" });
@@ -390,7 +353,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
     });
 
     // --- Admin: Cache Image (For P2P Metadata) ---
-    app.post('/admin/cache-image', node.requireAuth, (req: Request, res: Response) => {
+    router.post('/cache-image', node.requireAuth, (req: Request, res: Response) => {
         const imagePath = req.headers['x-image-path'] as string;
 
         if (!imagePath || imagePath.includes('..')) {
@@ -419,10 +382,9 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
         });
     });
 
-
     //--Proof admin
 
-    app.get('/admin/proofs', node.requireAuth, async (req: Request, res: Response) => {
+    router.get('/proofs', node.requireAuth, async (req: Request, res: Response) => {
         try {
             const { hoster } = req.query;
             const signer = node.getAuthenticatedSigner(req);
@@ -446,8 +408,8 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
-    // --- NEW: Batch Delete Proofs (After on-chain claim) ---
-    app.post('/admin/proofs/delete', node.requireAuth, (req: Request, res: Response) => {
+    // --- Batch Delete Proofs (After on-chain claim) ---
+    router.post('/proofs/delete', node.requireAuth, (req: Request, res: Response) => {
         const { filenames } = req.body;
         if (!Array.isArray(filenames)) return res.status(400).json({ error: 'Filenames array required' });
 
@@ -469,8 +431,8 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
         res.json({ success: true, deleted });
     });
 
-    // --- NEW: Batch Delete Votes (After on-chain sync) ---
-    app.post('/admin/votes/delete', node.requireAuth, (req: Request, res: Response) => {
+    // --- Batch Delete Votes (After on-chain sync) ---
+    router.post('/votes/delete', node.requireAuth, (req: Request, res: Response) => {
         const { filenames } = req.body;
         if (!Array.isArray(filenames)) return res.status(400).json({ error: 'Filenames array required' });
 
@@ -491,4 +453,44 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
         console.log(`[WaraNode] Deleted ${deleted} synced votes.`);
         res.json({ success: true, deleted });
     });
+
+    // --- Delete Link from node
+    router.delete('/link/delete/:id', node.requireAuth, async (req: Request, res: Response) => {
+        const { id } = req.params;
+        const link = node.links.get(id);
+
+        if (!link) {
+            return res.status(404).json({ error: "Link not found" });
+        }
+
+        try {
+            // 1. Remove from Memory
+            node.links.delete(id);
+
+            // 2. Remove Files
+            const waraPath = link.filePath;
+            const jsonPath = waraPath.replace('.wara', '.json');
+
+            if (fs.existsSync(waraPath)) fs.unlinkSync(waraPath);
+            if (fs.existsSync(jsonPath)) fs.unlinkSync(jsonPath);
+
+            // 3. Cleanup Subtitles (Best effort)
+            const dir = path.dirname(waraPath);
+            const files = fs.readdirSync(dir);
+            for (const f of files) {
+                if (f.startsWith(`${id}_`)) { // id_subId.vtt
+                    try { fs.unlinkSync(path.join(dir, f)); } catch (e) { }
+                }
+            }
+
+            console.log(`[WaraNode] Deleted link: ${id}`);
+            res.json({ success: true });
+
+        } catch (e) {
+            console.error("Delete failed", e);
+            res.status(500).json({ error: "Failed to delete files" });
+        }
+    });
+
+    return router;
 };

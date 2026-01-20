@@ -1,16 +1,18 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
+import { ethers } from 'ethers';
+import { decryptPayload, verifyPassword, decryptPrivateKey, encryptPayload } from '../encryption';
+import { randomUUID } from 'crypto';
 
-export const setupAuthRoutes = (app: Express, node: WaraNode) => {
+export const setupAuthRoutes = (node: WaraNode) => {
+    const router = Router();
     // POST /api/auth/register
-    app.post('/api/auth/register', async (req: Request, res: Response) => {
+    router.post('/register', async (req: Request, res: Response) => {
         const { username, password, privateKey } = req.body;
         if (!username || !password) return res.status(400).json({ error: 'Missing credentials' });
 
         try {
-            const { ethers } = await import('ethers');
             const { hashPassword, encryptPrivateKey } = await import('../encryption');
-
             const existing = await node.prisma.localProfile.findUnique({ where: { username } });
             if (existing) return res.status(400).json({ error: 'Username taken' });
 
@@ -48,12 +50,11 @@ export const setupAuthRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/auth/login
-    app.post('/api/auth/login', async (req: Request, res: Response) => {
+    router.post('/login', async (req: Request, res: Response) => {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ error: 'Missing credentials' });
         try {
             const { verifyPassword, decryptPrivateKey } = await import('../encryption');
-            const { ethers } = await import('ethers');
 
             const profile = await node.prisma.localProfile.findUnique({ where: { username } }); // Public prisma
             if (!profile || !verifyPassword(password, profile.passwordHash)) {
@@ -61,7 +62,7 @@ export const setupAuthRoutes = (app: Express, node: WaraNode) => {
             }
 
             // Generate Session Token
-            const authToken = require('crypto').randomUUID();
+            const authToken = randomUUID();
             node.userSessions.set(authToken, profile.username); // Public userSessions
 
             // Unlock Wallet for Session
@@ -87,7 +88,7 @@ export const setupAuthRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/auth/sign-ad-proof (Local Signing for Ads with Hashing)
-    app.post('/api/auth/sign-ad-proof', async (req: Request, res: Response) => {
+    router.post('/sign-ad-proof', async (req: Request, res: Response) => {
         const { authToken, campaignId, viewer, contentHash, linkId } = req.body;
         if (!authToken || !campaignId || !viewer || !contentHash || !linkId) {
             return res.status(400).json({ error: 'Missing ad proof data' });
@@ -103,10 +104,6 @@ export const setupAuthRoutes = (app: Express, node: WaraNode) => {
 
         try {
             // 3. Construct Hash (Solidity Compatible)
-            // Import ethers dynamically or assume global/imported. 
-            // Better to verify import at top, but for now dynamic is safer if not sure.
-            const { ethers } = await import('ethers');
-
             const onChainLinkId = ethers.id(linkId); // Keccak256 of string
             const ch = contentHash.startsWith('0x') ? contentHash : `0x${contentHash}`;
 
@@ -132,12 +129,11 @@ export const setupAuthRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/auth/import-profile (Encrypted with NodeKey)
-    app.post('/api/auth/import-profile', async (req: Request, res: Response) => {
+    router.post('/import-profile', async (req: Request, res: Response) => {
         const { payload } = req.body;
         if (!payload) return res.status(400).json({ error: 'Missing encrypted payload' });
 
         try {
-            const { decryptPayload } = await import('../encryption');
             // Decrypt using ADMIN KEY (Node Secret)
             const data = decryptPayload(payload, node.adminKey);
 
@@ -166,14 +162,11 @@ export const setupAuthRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/auth/remote-login (Encrypted credentials)
-    app.post('/api/auth/remote-login', async (req: Request, res: Response) => {
+    router.post('/remote-login', async (req: Request, res: Response) => {
         const { payload } = req.body;
         if (!payload) return res.status(400).json({ error: 'Missing encrypted payload' });
 
         try {
-            const { decryptPayload, verifyPassword, decryptPrivateKey } = await import('../encryption');
-            const { ethers } = await import('ethers');
-
             // Decrypt
             const data = decryptPayload(payload, node.adminKey);
 
@@ -191,7 +184,7 @@ export const setupAuthRoutes = (app: Express, node: WaraNode) => {
                 return res.status(401).json({ error: 'Invalid credentials' });
             }
 
-            const authToken = require('crypto').randomUUID();
+            const authToken = randomUUID();
             node.userSessions.set(authToken, profile.username);
 
             try {
@@ -218,13 +211,11 @@ export const setupAuthRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/auth/prepare-sync-payloads (Generate Auth Blobs for Remote Node)
-    app.post('/api/auth/prepare-sync-payloads', async (req: Request, res: Response) => {
+    router.post('/prepare-sync-payloads', async (req: Request, res: Response) => {
         const { targetUrl, password } = req.body;
         if (!targetUrl || !password) return res.status(400).json({ error: 'Missing targetUrl or password' });
 
         try {
-            const { encryptPayload, decryptPayload, verifyPassword } = await import('../encryption');
-
             // 1. Authenticate Local User (Password Check)
             // Ideally we check req.user via session, but for sensitive action repeat password is good.
             // Or we just find the user that matches this password.
@@ -296,5 +287,6 @@ export const setupAuthRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
+    return router;
 };
 

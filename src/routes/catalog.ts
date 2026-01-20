@@ -1,66 +1,13 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
 import { getMediaMetadata, searchTMDB, getSeasonDetails } from '../tmdb';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
-    // Get full local catalog of links
-    app.get('/api/catalog', async (req, res) => {
-        try {
-            const links = await node.prisma.link.findMany({
-                orderBy: { createdAt: 'desc' }
-            });
-            res.json(links);
-        } catch (e) {
-            res.status(500).json({ error: 'Failed to fetch catalog' });
-        }
-    });
-
-    // --- Image Serving Endpoints (P2P Metadata) ---
-    app.get('/catalog/poster/:sourceId', (req: Request, res: Response) => {
-        const { sourceId } = req.params;
-        if (!/^[a-z0-9_-]+$/i.test(sourceId)) return res.status(400).end();
-
-        const posterPath = path.join(node.dataDir, 'posters', `${sourceId}.jpg`);
-        if (fs.existsSync(posterPath)) {
-            res.setHeader('Cache-Control', 'public, max-age=31536000');
-            res.sendFile(posterPath);
-        } else {
-            res.status(404).end();
-        }
-    });
-
-    app.get('/catalog/backdrop/:sourceId', (req: Request, res: Response) => {
-        const { sourceId } = req.params;
-        if (!/^[a-z0-9_-]+$/i.test(sourceId)) return res.status(400).end();
-
-        const backdropPath = path.join(node.dataDir, 'backdrops', `${sourceId}.jpg`);
-        if (fs.existsSync(backdropPath)) {
-            res.setHeader('Cache-Control', 'public, max-age=31536000');
-            res.sendFile(backdropPath);
-        } else {
-            res.status(404).end();
-        }
-    });
-
-    app.get('/catalog/episode-still/:sourceId/:season/:episode', (req: Request, res: Response) => {
-        const { sourceId, season, episode } = req.params;
-        if (!/^[a-z0-9_-]+$/i.test(sourceId) || !/^\d+$/.test(season) || !/^\d+$/.test(episode)) {
-            return res.status(400).end();
-        }
-
-        const stillPath = path.join(node.dataDir, 'episode-stills', sourceId, `s${season}e${episode}.jpg`);
-        if (fs.existsSync(stillPath)) {
-            res.setHeader('Cache-Control', 'public, max-age=31536000');
-            res.sendFile(stillPath);
-        } else {
-            res.status(404).end();
-        }
-    });
-
+export const setupCatalogRoutes = (node: WaraNode) => {
+    const router = Router();
     // --- NEW: Public Catalog (For P2P Sync) ---
-    app.get('/catalog', (req: Request, res: Response) => {
+    router.get('/catalog', (req: Request, res: Response) => {
         const baseUrl = `http://${node.publicIp || 'localhost'}:${node.port}`;
         const hosterFilter = req.query.hoster as string;
 
@@ -105,8 +52,8 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
                     source,
                     type: info.type,
                     title: info.title || link.map.title,
-                    posterUrl: hasPoster ? `${baseUrl}/catalog/poster/${sourceId}` : null,
-                    backdropUrl: hasBackdrop ? `${baseUrl}/catalog/backdrop/${sourceId}` : null,
+                    posterUrl: hasPoster ? `${baseUrl}/api/catalog/poster/${sourceId}` : null,
+                    backdropUrl: hasBackdrop ? `${baseUrl}/api/catalog/backdrop/${sourceId}` : null,
                     hasLocalImages: hasPoster || hasBackdrop
                 });
             }
@@ -123,12 +70,67 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
         });
     });
 
+    // Get full local catalog of links
+    router.get('/links', async (req, res) => {
+        try {
+            const links = await node.prisma.link.findMany({
+                orderBy: { createdAt: 'desc' }
+            });
+            res.json(links);
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to fetch catalog' });
+        }
+    });
+
+    // --- Image Serving Endpoints (P2P Metadata) ---
+    router.get('/poster/:sourceId', (req: Request, res: Response) => {
+        const { sourceId } = req.params;
+        if (!/^[a-z0-9_-]+$/i.test(sourceId)) return res.status(400).end();
+
+        const posterPath = path.join(node.dataDir, 'posters', `${sourceId}.jpg`);
+        if (fs.existsSync(posterPath)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000');
+            res.sendFile(posterPath);
+        } else {
+            res.status(404).end();
+        }
+    });
+
+    router.get('/backdrop/:sourceId', (req: Request, res: Response) => {
+        const { sourceId } = req.params;
+        if (!/^[a-z0-9_-]+$/i.test(sourceId)) return res.status(400).end();
+
+        const backdropPath = path.join(node.dataDir, 'backdrops', `${sourceId}.jpg`);
+        if (fs.existsSync(backdropPath)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000');
+            res.sendFile(backdropPath);
+        } else {
+            res.status(404).end();
+        }
+    });
+
+    //Al parecer no se utiliza verificar para que sirve    
+    router.get('/episode-still/:sourceId/:season/:episode', (req: Request, res: Response) => {
+        const { sourceId, season, episode } = req.params;
+        if (!/^[a-z0-9_-]+$/i.test(sourceId) || !/^\d+$/.test(season) || !/^\d+$/.test(episode)) {
+            return res.status(400).end();
+        }
+
+        const stillPath = path.join(node.dataDir, 'episode-stills', sourceId, `s${season}e${episode}.jpg`);
+        if (fs.existsSync(stillPath)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000');
+            res.sendFile(stillPath);
+        } else {
+            res.status(404).end();
+        }
+    });
+
     // ==========================================
     // CATALOG API (Frontend Consumption)
     // ==========================================
 
     // GET /api/catalog/recent?genre=Action
-    app.get('/api/catalog/recent', async (req: Request, res: Response) => {
+    router.get('/recent', async (req: Request, res: Response) => {
         const genre = req.query.genre as string;
 
         try {
@@ -175,7 +177,7 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /api/catalog/search?q=Matrix
-    app.get('/api/catalog/search', async (req: Request, res: Response) => {
+    router.get('/search', async (req: Request, res: Response) => {
         const q = req.query.q as string;
         if (!q) return res.json([]);
 
@@ -269,7 +271,7 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /api/catalog/unverified (Community Uploads - Playable but not DAO Approved)
-    app.get('/api/catalog/unverified', async (req: Request, res: Response) => {
+    router.get('/unverified', async (req: Request, res: Response) => {
         console.log(`[Catalog] GET /unverified Request received. Query:`, req.query);
         const genre = req.query.genre as string;
         try {
@@ -304,7 +306,7 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /api/catalog/requests (Requested but NO content available yet)
-    app.get('/api/catalog/requests', async (req: Request, res: Response) => {
+    router.get('/requests', async (req: Request, res: Response) => {
         const genre = req.query.genre as string;
         try {
             // 1. Find all links to EXCLUDE them
@@ -338,7 +340,8 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
-    app.post('/api/catalog/request', async (req: Request, res: Response) => {
+    // POST /api/catalog/request (Request a new media)
+    router.post('/request', async (req: Request, res: Response) => {
         const { mediaId, source = 'tmdb', sourceId, type = 'movie' } = req.body;
         if (!mediaId && !sourceId) return res.status(400).json({ error: 'Missing mediaId or sourceId' });
 
@@ -407,23 +410,25 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
-    app.get('/api/catalog/meta/:id', async (req: Request, res: Response) => {
+    // --- Catalog Metadata ---
+
+    router.get('/meta/:id', async (req: Request, res: Response) => {
         const type = (req.query.type as string) || 'movie';
         const data = await getMediaMetadata(node.prisma, req.params.id, type, 'approved', node);
         res.json(data || {});
     });
 
-    app.get('/api/catalog/meta/:id/season/:season', async (req: Request, res: Response) => {
+    router.get('/meta/:id/season/:season', async (req: Request, res: Response) => {
         const data = await getSeasonDetails(node.prisma, req.params.id, Number(req.params.season));
         res.json(data || {});
     });
 
     // --- TMDB Key Management ---
-    app.get('/api/tmdb-key', (req: Request, res: Response) => {
+    router.get('/tmdb-key', (req: Request, res: Response) => {
         res.json({ apiKey: process.env.TMDB_API_KEY || '' });
     });
 
-    app.post('/api/tmdb-key', (req: Request, res: Response) => {
+    router.post('/tmdb-key', (req: Request, res: Response) => {
         const { apiKey } = req.body;
         if (!apiKey) return res.status(400).json({ error: 'Key required' });
 
@@ -433,4 +438,6 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
         // But for runtime update, this works.
         res.json({ success: true });
     });
+
+    return router;
 };

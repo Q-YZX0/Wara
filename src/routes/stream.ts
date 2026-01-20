@@ -1,4 +1,4 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
 import { WaraMap } from '../types';
 import * as fs from 'fs';
@@ -7,10 +7,10 @@ import * as crypto from 'crypto';
 import { LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI } from '../contracts';
 
 
-export const setupStreamRoutes = (app: Express, node: WaraNode) => {
-
+export const setupStreamRoutes = (node: WaraNode) => {
+    const router = Router();
     // GET /stream/auth
-    app.get('/stream/auth', async (req: Request, res: Response) => {
+    router.get('/auth', async (req: Request, res: Response) => {
         const { wallet, linkId } = req.query;
         const viewerIp = req.socket.remoteAddress;
 
@@ -130,7 +130,7 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
         }
     });
     //GET /stream/:id/map
-    app.get('/stream/:id/map', (req: Request, res: Response) => {
+    router.get('/map', (req: Request, res: Response) => {
         const link = node.links.get(req.params.id);
         if (!link) return res.status(404).json({ error: 'Link not found' });
 
@@ -166,7 +166,7 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
     });
 
     //GET /stream/:id/stream
-    app.get('/stream/:id/stream', (req: Request, res: Response) => {
+    router.get('/:id/stream', (req: Request, res: Response) => {
         const link = node.links.get(req.params.id);
         if (!link) return res.status(404).json({ error: 'Link not found' });
 
@@ -274,7 +274,7 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
     });
 
     //GET /stream/:id/subtitle/:lang
-    app.get('/stream/:id/subtitle/:lang', (req: Request, res: Response) => {
+    router.get('/:id/subtitle/:lang', (req: Request, res: Response) => {
         const { id, lang } = req.params;
         // Simple validation
         if (!/^[a-z0-9]+$/i.test(id) || !/^[a-z]+$/i.test(lang)) return res.status(400).end();
@@ -305,7 +305,7 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
     });
 
     //GET /stream/user/progress
-    app.get('/stream/user/progress', async (req: Request, res: Response) => {
+    router.get('/user/progress', async (req: Request, res: Response) => {
         const { sourceId, source = 'tmdb', season, episode, wallet } = req.query;
         if (!wallet) return res.status(400).end();
 
@@ -333,7 +333,7 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
     });
 
     //POST /stream/user/progress
-    app.post('/stream/user/progress', async (req: Request, res: Response) => {
+    router.post('/user/progress', async (req: Request, res: Response) => {
         const { sourceId, source = 'tmdb', season, episode, wallet, currentTime, duration, isEnded } = req.body;
         if (!sourceId || !wallet) return res.status(400).end();
 
@@ -377,7 +377,7 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
     });
 
     //POST /stream/proof/submit
-    app.post('/stream/proof/submit', async (req: Request, res: Response) => {
+    router.post('/proof/submit', async (req: Request, res: Response) => {
         const { campaignId, viewerAddress, uploaderWallet, signature, linkId, contentHash } = req.body;
 
         if (campaignId === undefined || !viewerAddress || !uploaderWallet || !signature || !linkId || !contentHash) {
@@ -460,7 +460,7 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
     });
 
     //POST /stream/proof/premium
-    app.post('/stream/proof/premium', async (req: Request, res: Response) => {
+    router.post('/proof/premium', async (req: Request, res: Response) => {
         const { wallet, signature, nonce, linkId, contentHash, hoster } = req.body;
         if (!wallet || !signature || !nonce || !linkId) {
             return res.status(400).json({ error: "Missing premium proof data" });
@@ -535,4 +535,6 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
             res.status(500).json({ error: e.message || "Failed to process premium proof" });
         }
     });
+
+    return router;
 };

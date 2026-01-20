@@ -1,10 +1,10 @@
 import { PrismaClient } from '@prisma/client';
+import { ethers } from 'ethers';
+import fs from 'fs';
+import path from 'path';
+import https from 'https';
 
 const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
-
-const fs = require('fs');
-const path = require('path');
-const https = require('https');
 
 async function downloadImage(url: string, destPath: string) {
     return new Promise((resolve, reject) => {
@@ -29,7 +29,6 @@ export async function getMediaMetadata(prisma: PrismaClient, sourceId: string, t
     if (!process.env.TMDB_API_KEY && !node && source === 'tmdb') return null;
 
     try {
-        const { ethers } = require('ethers');
         const waraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
 
         // 1. Check existing to prevent redundant fetches

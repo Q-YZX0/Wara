@@ -1,4 +1,4 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
 import { ethers } from 'ethers';
 import { decryptPayload } from '../encryption';
@@ -12,14 +12,14 @@ import { SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI } from '../contracts';
 const fetch = require('node-fetch');
 // Utility
 
-export const setupWalletRoutes = (app: Express, node: WaraNode) => {
-
+export const setupWalletRoutes = (node: WaraNode) => {
+    const router = Router();
     // ==========================================
     // WALLET & BLOCKCHAIN API  
     // ==========================================
 
     // GET /api/wallet/balances?address=0x... (Legacy - public)
-    app.get('/api/wallet/balances', async (req: Request, res: Response) => {
+    router.get('/balances', async (req: Request, res: Response) => {
         const { address } = req.query;
         if (!address) return res.status(400).json({ error: 'Missing address' });
 
@@ -54,7 +54,7 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /api/wallet/my-balances?userId=xxx (Secure - uses DB)
-    app.get('/api/wallet/my-balances', async (req: Request, res: Response) => {
+    router.get('/my-balances', async (req: Request, res: Response) => {
         const { userId } = req.query;
         if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
@@ -98,7 +98,7 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/wallet/transfer { from, to, amount, type: 'wara'|'eth' }
-    app.post('/api/wallet/transfer', async (req: Request, res: Response) => {
+    router.post('/transfer', async (req: Request, res: Response) => {
         const { from, to, amount, type, password } = req.body;
         if (!from || !to || !amount) return res.status(400).json({ error: 'Missing fields' });
 
@@ -131,8 +131,10 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
+    //CLAIM PROFF
+
     // POST /api/wallet/claim-rewards (Batch Process Local Proofs)
-    app.post('/api/wallet/claim-rewards', async (req: Request, res: Response) => {
+    router.post('/claim-rewards', async (req: Request, res: Response) => {
         const { wallet: walletAddress, password } = req.body;
         if (!walletAddress) return res.status(400).json({ error: 'Missing wallet address' });
 
@@ -368,7 +370,7 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/wallet/claim-vote-rewards (Batch Process Pending Votes from Disk)
-    app.post('/api/wallet/claim-vote-rewards', async (req: Request, res: Response) => {
+    router.post('/claim-vote-rewards', async (req: Request, res: Response) => {
         const { wallet: walletAddress, password } = req.body;
         if (!walletAddress) return res.status(400).json({ error: 'Missing wallet address' });
 
@@ -511,8 +513,10 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
+    //EXPORT PROFF
+
     // GET /api/wallet/export-proofs (For remote syncing - Protected)
-    app.get('/api/wallet/export-proofs', node.requireAuth, async (req: Request, res: Response) => {
+    router.get('/export-proofs', node.requireAuth, async (req: Request, res: Response) => {
         try {
             const { wallet } = req.query;
             if (!wallet) return res.status(400).json({ error: 'Missing wallet' });
@@ -544,7 +548,7 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
     });
 
     // GET /api/wallet/export-votes (Remote Sync)
-    app.get('/api/wallet/export-votes', node.requireAuth, async (req: Request, res: Response) => {
+    router.get('/export-votes', node.requireAuth, async (req: Request, res: Response) => {
         try {
             const { wallet } = req.query; // Filter by voter wallet
             if (!wallet) return res.status(400).json({ error: 'Missing wallet' });
@@ -570,5 +574,33 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
             res.status(500).json({ error: e.message });
         }
     });
+
+    //PROFILE PREFERENCES
+
+    // GET /api/wallet/preferences
+    router.get('/preferences', async (req: Request, res: Response) => {
+        const { userId } = req.query;
+        if (!userId) return res.status(400).json({ error: 'Missing userId' });
+        try {
+            const profile = await node.prisma.localProfile.findUnique({ where: { id: String(userId) }, select: { preferredLanguage: true } });
+            res.json(profile || { preferredLanguage: 'es' });
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to fetch preferences' });
+        }
+    });
+
+    // POST /api/wallet/preferences
+    router.post('/preferences', async (req: Request, res: Response) => {
+        const { userId, preferredLanguage } = req.body;
+        if (!userId || !preferredLanguage) return res.status(400).json({ error: 'Missing parameters' });
+        try {
+            await node.prisma.localProfile.update({ where: { id: String(userId) }, data: { preferredLanguage: String(preferredLanguage) } });
+            res.json({ success: true });
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to save preferences' });
+        }
+    });
+
+    return router;
 
 };

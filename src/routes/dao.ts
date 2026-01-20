@@ -1,11 +1,10 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
-import { ethers } from 'ethers';
 
-export const setupDaoRoutes = (app: Express, node: WaraNode) => {
-
+export const setupDaoRoutes = (node: WaraNode) => {
+    const router = Router();
     // GET /api/dao/proposals
-    app.get('/api/dao/proposals', async (req: Request, res: Response) => {
+    router.get('/proposals', async (req: Request, res: Response) => {
         try {
             const nextId = await node.daoContract.nextProposalId();
             const proposals = [];
@@ -37,7 +36,7 @@ export const setupDaoRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/dao/proposals
-    app.post('/api/dao/proposals', async (req: Request, res: Response) => {
+    router.post('/proposals', async (req: Request, res: Response) => {
         const { description, recipient, amount, pType } = req.body;
         try {
             const userSigner = node.getAuthenticatedSigner(req);
@@ -57,7 +56,7 @@ export const setupDaoRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/dao/vote
-    app.post('/api/dao/vote', async (req: Request, res: Response) => {
+    router.post('/vote', async (req: Request, res: Response) => {
         const { proposalId, side } = req.body;
         try {
             const userSigner = node.getAuthenticatedSigner(req);
@@ -75,4 +74,5 @@ export const setupDaoRoutes = (app: Express, node: WaraNode) => {
             res.status(500).json({ error: e.message });
         }
     });
+    return router;
 };

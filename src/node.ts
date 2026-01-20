@@ -37,7 +37,6 @@ import { setupWalletRoutes } from './routes/wallet';
 import { setupMediaRoutes } from './routes/media';
 import { setupAirdropRoutes } from './routes/airdrop';
 import { setupDaoRoutes } from './routes/dao';
-import { setupProfileRoutes } from './routes/profile';
 import { PriceOracleService } from './oracle-service';
 
 export interface RegisteredLink {
@@ -653,56 +652,37 @@ export class WaraNode {
                 }
             });
         });
-
         // AD MODULE ROUTES (Refactored)
-        setupAdsRoutes(this.app, this);
-
+        this.app.use('/api/ad', setupAdsRoutes(this));
         // AUTH & USER MODULE (Refactored)
-        setupAuthRoutes(this.app, this);
-
+        this.app.use('/api/auth', setupAuthRoutes(this));
         // ADMIN ROUTES
-        setupAdminRoutes(this.app, this);
-
+        this.app.use('/api/admin', setupAdminRoutes(this));
         // NETWORK & DISCOVERY
-        setupNetworkRoutes(this.app, this);
-
+        this.app.use('/api/network', setupNetworkRoutes(this));
         // CATALOG & MEDIA
-        setupCatalogRoutes(this.app, this);
-
+        this.app.use('/api/catalog', setupCatalogRoutes(this));
         // LINKS
         this.app.use('/api/links', setupLinkRoutes(this));
-
         // STREAMS & PLAYBACK
-        setupStreamRoutes(this.app, this);
-
+        this.app.use('/api/stream', setupStreamRoutes(this));
         // REGISTRY (Identity)
-        setupRegistryRoutes(this.app, this);
-
+        this.app.use('/api/registry', setupRegistryRoutes(this));
         // REMOTE NODES
-        setupRemoteRoutes(this.app, this);
-
+        this.app.use('/api/remote', setupRemoteRoutes(this));
         // LEADERBOARD
-        setupLeaderboardRoutes(this.app, this);
-
+        this.app.use('/api/leaderboard', setupLeaderboardRoutes(this));
         // ORACLE (Smart Committee)
-        setupOracleRoutes(this.app, this);
-
-        // WALLET
-        setupWalletRoutes(this.app, this);
-
-        // PROFILE
-        setupProfileRoutes(this.app, this);
-
+        this.app.use('/api/oracle', setupOracleRoutes(this));
+        // ColdWallet Profile(userSigner)
+        this.app.use('/api/wallet', setupWalletRoutes(this));
         // Setup Media Registry Routes
         this.app.use('/api/media', setupMediaRoutes(this));
-
         // SUBSCRIPTION
         this.app.use('/api/subscription', setupSubscriptionRoutes(this));
-
-
         // AIRDROP & DAO
-        setupAirdropRoutes(this.app, this);
-        setupDaoRoutes(this.app, this);
+        this.app.use('/api/airdrop', setupAirdropRoutes(this));
+        this.app.use('/api/dao', setupDaoRoutes(this));
     }
 
     public registerLink(id: string, encryptedFilePath: string, map: WaraMap, key?: string) {
@@ -874,7 +854,7 @@ export class WaraNode {
             // 1. Discover Peers from Trackers
             for (const tracker of this.trackers) {
                 try {
-                    const res = await fetch(`${tracker}/peers`);
+                    const res = await fetch(`${tracker}/api/network/peers`);
                     if (!res.ok) continue;
                     const peers = await res.json();
                     for (const peer of (Array.isArray(peers) ? peers : peers.peers || [])) {
@@ -966,7 +946,7 @@ export class WaraNode {
                                         const postersDest = path.join(postersDir, `${sourceId}.jpg`);
                                         if (!fs.existsSync(postersDest)) {
                                             if (!fs.existsSync(postersDir)) fs.mkdirSync(postersDir, { recursive: true });
-                                            fetch(`${data.endpoint}/catalog/poster/${sourceId}`).then(res => {
+                                            fetch(`${data.endpoint}/api/catalog/poster/${sourceId}`).then(res => {
                                                 if (res.ok) {
                                                     const dest = fs.createWriteStream(postersDest);
                                                     (res.body as any).pipe(dest);
@@ -1150,7 +1130,7 @@ export class WaraNode {
                 const targets = connectedPeers.sort(() => 0.5 - Math.random()).slice(0, 3);
                 for (const p of targets) {
                     try {
-                        await fetch(`${p.endpoint}/gossip`, {
+                        await fetch(`${p.endpoint}/api/network/gossip`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(gossipPayload)
@@ -1306,7 +1286,7 @@ export class WaraNode {
                 // Skip self if localhost
                 if (targetData.endpoint.includes(`:${this.port}`)) return;
 
-                fetch(`${targetData.endpoint}/gossip`, {
+                fetch(`${targetData.endpoint}/api/network/gossip`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ peers: payload })

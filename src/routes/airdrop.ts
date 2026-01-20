@@ -1,11 +1,12 @@
-import { Express, Request, Response } from 'express';
+import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
-import { ethers } from 'ethers';
+import fs from 'fs';
+import path from 'path';
 
-export const setupAirdropRoutes = (app: Express, node: WaraNode) => {
-
-    // GET /api/airdrop/state
-    app.get('/api/airdrop/state', async (req: Request, res: Response) => {
+export const setupAirdropRoutes = (node: WaraNode) => {
+    const router = Router();
+    // GET /state
+    router.get('/state', async (req: Request, res: Response) => {
         try {
             const currentCycleId = await node.airdropContract.currentCycleId();
             const totalRegistered = await node.airdropContract.totalRegistered();
@@ -37,7 +38,7 @@ export const setupAirdropRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/airdrop/register
-    app.post('/api/airdrop/register', async (req: Request, res: Response) => {
+    router.post('/register', async (req: Request, res: Response) => {
         try {
             const userSigner = node.getAuthenticatedSigner(req);
             if (!userSigner) return res.status(401).json({ error: 'Unauthorized' });
@@ -57,7 +58,7 @@ export const setupAirdropRoutes = (app: Express, node: WaraNode) => {
     });
 
     // POST /api/airdrop/claim
-    app.post('/api/airdrop/claim', async (req: Request, res: Response) => {
+    router.post('/claim', async (req: Request, res: Response) => {
         let { cycleId, amount, merkleProof } = req.body;
 
         try {
@@ -65,8 +66,7 @@ export const setupAirdropRoutes = (app: Express, node: WaraNode) => {
 
             // AUTO-PROOF LOOKUP
             if (userSigner && (!merkleProof || merkleProof.length === 0)) {
-                const fs = require('fs');
-                const path = require('path');
+
                 const airdropDir = path.join(node.dataDir, 'airdrops');
 
                 if (fs.existsSync(airdropDir)) {
@@ -101,4 +101,5 @@ export const setupAirdropRoutes = (app: Express, node: WaraNode) => {
             res.status(500).json({ error: e.message });
         }
     });
+    return router;
 };
