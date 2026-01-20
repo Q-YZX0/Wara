@@ -31,8 +31,8 @@ import { setupSubscriptionRoutes } from './routes/subscription';
 import { setupStreamRoutes } from './routes/stream';
 import { setupRegistryRoutes } from './routes/registry';
 import { setupRemoteRoutes } from './routes/remote';
-import { setupVoteRoutes } from './routes/vote';
 import { setupLeaderboardRoutes } from './routes/leaderboard';
+import { setupOracleRoutes } from './routes/oracle';
 import { setupWalletRoutes } from './routes/wallet';
 import { setupMediaRoutes } from './routes/media';
 import { setupAirdropRoutes } from './routes/airdrop';
@@ -428,7 +428,7 @@ export class WaraNode {
                 const isLocal = ip === '::1' || ip.includes('127.0.0.1') || ip === 'localhost';
 
                 // Block sensitive paths from external IPs
-                // allow /api/catalog, /wara/ (streaming)
+                // allow /api/catalog, /stream/ (streaming)
                 const sensitivePaths = ['/api/auth/', '/api/wallet/', '/admin/', '/api/remote-nodes'];
                 const isSensitive = sensitivePaths.some(p => req.path.startsWith(p));
 
@@ -670,7 +670,7 @@ export class WaraNode {
         setupCatalogRoutes(this.app, this);
 
         // LINKS
-        setupLinkRoutes(this.app, this);
+        this.app.use('/api/links', setupLinkRoutes(this));
 
         // STREAMS & PLAYBACK
         setupStreamRoutes(this.app, this);
@@ -681,14 +681,11 @@ export class WaraNode {
         // REMOTE NODES
         setupRemoteRoutes(this.app, this);
 
-        // VOTING
-        setupVoteRoutes(this.app, this);
-
         // LEADERBOARD
         setupLeaderboardRoutes(this.app, this);
 
-        // ADS
-        // Removed duplicate setupAdsRoutes(this.app, this);
+        // ORACLE (Smart Committee)
+        setupOracleRoutes(this.app, this);
 
         // WALLET
         setupWalletRoutes(this.app, this);
@@ -954,7 +951,7 @@ export class WaraNode {
                                 const waraId = item.waraId || (mediaType === 'episode' ? null : ethers.solidityPackedKeccak256(["string", "string"], [source, `:${sourceId}`]));
                                 if (waraId) {
                                     console.log(`[WaraNode] Discovery: Fetching Sovereign Metadata for ${sourceId} from ${data.endpoint}...`);
-                                    const mediaRes = await fetch(`${data.endpoint}/api/media/wara/${waraId}`, { signal: AbortSignal.timeout(3000) });
+                                    const mediaRes = await fetch(`${data.endpoint}/api/media/stream/${waraId}`, { signal: AbortSignal.timeout(3000) });
                                     if (mediaRes.ok) {
                                         const remoteMedia = await mediaRes.json();
                                         media = await this.prisma.media.upsert({
@@ -995,7 +992,7 @@ export class WaraNode {
 
                         // STORE HOST AUTHORITY ONLY (Pragmatic Reuse of URL field)
                         // We store the Peer Name (or Address) in the 'url' field.
-                        // The full URL will be constructed at runtime: http://<host>/wara/<id>
+                        // The full URL will be constructed at runtime: http://<host>/stream/<id>
                         // Assumption: Local ID matches Remote ID for the same Link record.
                         const storageAuthority = name;
 
@@ -1329,7 +1326,7 @@ export class WaraNode {
             activeStreams: l.activeStreams,
             mediaInfo: l.map.mediaInfo,
             hosterAddress: l.map.hosterAddress,
-            url: `http://${this.publicIp || 'localhost'}:${this.port}/wara/${l.id}${l.key ? '#' + l.key : ''}`
+            url: `http://${this.publicIp || 'localhost'}:${this.port}/stream/${l.id}${l.key ? '#' + l.key : ''}`
         }));
 
         // 2. P2P Links (Remote from DB)
@@ -1340,7 +1337,7 @@ export class WaraNode {
         const p2pItems = await Promise.all(remoteLinks.map(async (link) => {
             let finalUrl = link.url;
 
-            // RESOLVE PORTABLE URL: http://<nodeName>/wara/<id> -> http://<IP>:PORT/wara/<id>
+            // RESOLVE PORTABLE URL: http://<nodeName>/stream/<id> -> http://<IP>:PORT/stream/<id>
             try {
                 const url = new URL(link.url);
                 const hostname = url.hostname;

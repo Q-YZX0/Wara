@@ -9,253 +9,8 @@ import { LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI } from '../contracts';
 
 export const setupStreamRoutes = (app: Express, node: WaraNode) => {
 
-    app.get('/wara/:id/map', (req: Request, res: Response) => {
-        const link = node.links.get(req.params.id);
-        if (!link) return res.status(404).json({ error: 'Link not found' });
-
-        const effectiveHost = node.publicIp ? node.publicIp : (req.headers.host?.split(':')[0] || 'localhost');
-        const isSystemBusy = node.isSystemOverloaded();
-        const isFull = link.activeStreams >= node.globalMaxStreams;
-        const reportedActive = isSystemBusy ? node.globalMaxStreams : link.activeStreams;
-
-        const sessionKey = `${req.ip}_${link.id}`;
-        const expiry = node.activeSessions.get(sessionKey);
-
-        // Bypass check
-        const viewerParam = req.query.viewer as string;
-        const isHoster = viewerParam && link.map.hosterAddress &&
-            viewerParam.toLowerCase() === link.map.hosterAddress.toLowerCase();
-        const isLocal = (req.ip === '::1' || req.ip === '127.0.0.1' || req.ip === '::ffff:127.0.0.1');
-
-        const adRequired = (isLocal || isHoster) ? false : (!expiry || expiry < Date.now());
-
-        const liveMap: WaraMap & { adRequired: boolean, key?: string } = {
-            ...link.map,
-            status: (isFull || isSystemBusy) ? 'busy' : 'online',
-            publicEndpoint: `http://${effectiveHost}:${node.port}/wara/${link.id}`,
-            adRequired: adRequired,
-            key: link.key, // EXPOSE KEY IN MAP FOR RECOVERY
-            stats: {
-                activeStreams: reportedActive,
-                maxStreams: node.globalMaxStreams
-            }
-        };
-
-        res.json(liveMap);
-    });
-
-    app.get('/wara/:id/stream', (req: Request, res: Response) => {
-        const link = node.links.get(req.params.id);
-        if (!link) return res.status(404).json({ error: 'Link not found' });
-
-        if (node.isSystemOverloaded() || link.activeStreams >= node.globalMaxStreams) {
-            return res.status(503).json({ error: 'System busy' });
-        }
-
-        // --- AD ENFORCEMENT ---
-        const linkId = req.params.id;
-        const sessionKey = `${req.ip}_${linkId}`;
-        const sessionExpiry = node.activeSessions.get(sessionKey);
-
-        // Bypass for: Localhost browsing local node
-        const isLocal = req.ip === '::1' || req.ip === '127.0.0.1' || req.ip === '::ffff:127.0.0.1';
-
-        if (!isLocal && (!sessionExpiry || sessionExpiry < Date.now())) {
-            return res.status(402).json({
-                error: 'Ad View Required',
-                message: 'Please complete the ad view to unlock this stream for 4 hours.'
-            });
-        }
-
-        const stat = fs.statSync(link.filePath); // Restore stat definition here
-
-        // --- Decryption Logic for Non-SW Clients (LAN/Mobile) ---
-        const shouldDecrypt = req.query.decrypt === 'true';
-        const providedKey = req.query.key as string;
-
-        if (shouldDecrypt) {
-            if (!providedKey) return res.status(400).json({ error: 'Missing key for decryption' });
-
-            // Disable Range for complexity reasons (CTR random access requires IV math)
-            // We stream the whole file with 200 OK. Browsers handle this, just seeking is limited.
-            const head = {
-                'Content-Length': stat.size, // Size is same (CTR preserves size)
-                'Content-Type': link.map.mimeType || 'video/mp4',
-                'Access-Control-Allow-Origin': '*'
-            };
-            res.writeHead(200, head);
-
-            try {
-                const keyBuf = Buffer.from(providedKey, 'hex');
-                const ivBuf = Buffer.from(link.map.iv, 'hex');
-
-                const decipher = crypto.createDecipheriv('aes-256-ctr', keyBuf, ivBuf);
-
-                // Handle pipe errors
-                const readStream = fs.createReadStream(link.filePath);
-
-                readStream.on('error', (e) => {
-                    console.error("Read Error:", e);
-                    res.end();
-                });
-
-                readStream.pipe(decipher).pipe(res);
-            } catch (e) {
-                console.error("Decryption init failed:", e);
-                res.status(500).end();
-            }
-
-            // Tracking
-            link.activeStreams++;
-            req.on('close', () => {
-                link.activeStreams = Math.max(0, link.activeStreams - 1);
-            });
-            return;
-        }
-
-        // Standard Encrypted Stream (for Service Worker)
-        const fileSize = stat.size;
-        const range = req.headers.range;
-
-        if (range) {
-            const parts = range.replace(/bytes=/, "").split("-");
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-            const chunksize = (end - start) + 1;
-
-            const file = fs.createReadStream(link.filePath, { start, end });
-            const head = {
-                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-                'Accept-Ranges': 'bytes',
-                'Content-Length': chunksize,
-                'Content-Type': 'application/octet-stream',
-                'Access-Control-Allow-Origin': '*'
-            };
-
-            res.writeHead(206, head);
-            file.pipe(res);
-        } else {
-            const head = {
-                'Content-Length': fileSize,
-                'Content-Type': 'application/octet-stream',
-                'Access-Control-Allow-Origin': '*'
-            };
-            res.writeHead(200, head);
-            fs.createReadStream(link.filePath).pipe(res);
-        }
-
-        // Simple load tracking (approximate)
-        link.activeStreams++;
-        req.on('close', () => {
-            link.activeStreams = Math.max(0, link.activeStreams - 1);
-        });
-    });
-
-    // --- Public: Get Subtitle ---
-    app.get('/wara/:id/subtitle/:lang', (req: Request, res: Response) => {
-        const { id, lang } = req.params;
-        // Simple validation
-        if (!/^[a-z0-9]+$/i.test(id) || !/^[a-z]+$/i.test(lang)) return res.status(400).end();
-
-        // Try vtt then srt
-        let subPath = path.join(node.dataDir, `${id}_${lang}.vtt`);
-        if (!fs.existsSync(subPath)) {
-            subPath = path.join(node.dataDir, `${id}_${lang}.srt`);
-        }
-
-        if (fs.existsSync(subPath)) {
-            res.setHeader('Access-Control-Allow-Origin', '*');
-
-            if (subPath.endsWith('.srt')) {
-                try {
-                    const srt = fs.readFileSync(subPath, 'utf-8');
-                    const vtt = "WEBVTT\n\n" + srt.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
-                    res.setHeader('Content-Type', 'text/vtt');
-                    return res.send(vtt);
-                } catch (e) { return res.status(500).end(); }
-            }
-
-            res.setHeader('Content-Type', 'text/vtt'); // Force VTT mime even for SRT to trick validation? No.
-            res.sendFile(subPath);
-        } else {
-            res.status(404).end();
-        }
-    });
-
-    // GET /api/progress
-    app.get('/wara/user/progress', async (req: Request, res: Response) => {
-        const { sourceId, source = 'tmdb', season, episode, wallet } = req.query;
-        if (!wallet) return res.status(400).end();
-
-        try {
-            const s = season ? parseInt(season as string) : 0;
-            const e = episode ? parseInt(episode as string) : 0;
-
-            const { ethers } = await import('ethers');
-            const itemWaraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
-
-            const progress = await node.prisma.playbackProgress.findUnique({
-                where: {
-                    waraId_season_episode_viewerWallet: {
-                        waraId: itemWaraId,
-                        season: s,
-                        episode: e,
-                        viewerWallet: wallet as string
-                    }
-                }
-            });
-            res.json(progress);
-        } catch (err) {
-            res.json(null);
-        }
-    });
-
-    // POST /api/progress
-    app.post('/wara/user/progress', async (req: Request, res: Response) => {
-        const { sourceId, source = 'tmdb', season, episode, wallet, currentTime, duration, isEnded } = req.body;
-        if (!sourceId || !wallet) return res.status(400).end();
-
-        try {
-            const s = season ? parseInt(season) : 0;
-            const e = episode ? parseInt(episode) : 0;
-
-            const { ethers } = await import('ethers');
-            const itemWaraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
-
-            await node.prisma.playbackProgress.upsert({
-                where: {
-                    waraId_season_episode_viewerWallet: {
-                        waraId: itemWaraId,
-                        season: s,
-                        episode: e,
-                        viewerWallet: wallet
-                    }
-                },
-                update: {
-                    currentTime: parseFloat(currentTime),
-                    duration: parseFloat(duration),
-                    watchedCount: isEnded ? { increment: 1 } : undefined,
-                    updatedAt: new Date()
-                },
-                create: {
-                    waraId: itemWaraId,
-                    sourceId: String(sourceId),
-                    season: s,
-                    episode: e,
-                    viewerWallet: wallet,
-                    currentTime: parseFloat(currentTime),
-                    duration: parseFloat(duration),
-                    watchedCount: isEnded ? 1 : 0
-                }
-            });
-            res.json({ success: true });
-        } catch (err) {
-            res.status(500).json({ error: 'Failed to save progress' });
-        }
-    });
-
-    // GET /api/auth/check
-    app.get('/wara/access/auth', async (req: Request, res: Response) => {
+    // GET /stream/auth
+    app.get('/stream/auth', async (req: Request, res: Response) => {
         const { wallet, linkId } = req.query;
         const viewerIp = req.socket.remoteAddress;
 
@@ -374,10 +129,255 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
             res.status(500).json({ error: 'Access check failed' });
         }
     });
+    //GET /stream/:id/map
+    app.get('/stream/:id/map', (req: Request, res: Response) => {
+        const link = node.links.get(req.params.id);
+        if (!link) return res.status(404).json({ error: 'Link not found' });
 
-    // --- NEW: Submit Ad Proof (Proof of Attention) ---
-    // Path changed to /wara/proof/submit to avoid conflict with /wara/:id
-    app.post('/wara/proof/submit', async (req: Request, res: Response) => {
+        const effectiveHost = node.publicIp ? node.publicIp : (req.headers.host?.split(':')[0] || 'localhost');
+        const isSystemBusy = node.isSystemOverloaded();
+        const isFull = link.activeStreams >= node.globalMaxStreams;
+        const reportedActive = isSystemBusy ? node.globalMaxStreams : link.activeStreams;
+
+        const sessionKey = `${req.ip}_${link.id}`;
+        const expiry = node.activeSessions.get(sessionKey);
+
+        // Bypass check
+        const viewerParam = req.query.viewer as string;
+        const isHoster = viewerParam && link.map.hosterAddress &&
+            viewerParam.toLowerCase() === link.map.hosterAddress.toLowerCase();
+        const isLocal = (req.ip === '::1' || req.ip === '127.0.0.1' || req.ip === '::ffff:127.0.0.1');
+
+        const adRequired = (isLocal || isHoster) ? false : (!expiry || expiry < Date.now());
+
+        const liveMap: WaraMap & { adRequired: boolean, key?: string } = {
+            ...link.map,
+            status: (isFull || isSystemBusy) ? 'busy' : 'online',
+            publicEndpoint: `http://${effectiveHost}:${node.port}/stream/${link.id}`,
+            adRequired: adRequired,
+            key: link.key, // EXPOSE KEY IN MAP FOR RECOVERY
+            stats: {
+                activeStreams: reportedActive,
+                maxStreams: node.globalMaxStreams
+            }
+        };
+
+        res.json(liveMap);
+    });
+
+    //GET /stream/:id/stream
+    app.get('/stream/:id/stream', (req: Request, res: Response) => {
+        const link = node.links.get(req.params.id);
+        if (!link) return res.status(404).json({ error: 'Link not found' });
+
+        if (node.isSystemOverloaded() || link.activeStreams >= node.globalMaxStreams) {
+            return res.status(503).json({ error: 'System busy' });
+        }
+
+        // --- AD ENFORCEMENT ---
+        const linkId = req.params.id;
+        const sessionKey = `${req.ip}_${linkId}`;
+        const sessionExpiry = node.activeSessions.get(sessionKey);
+
+        // Bypass for: Localhost browsing local node
+        const isLocal = req.ip === '::1' || req.ip === '127.0.0.1' || req.ip === '::ffff:127.0.0.1';
+
+        if (!isLocal && (!sessionExpiry || sessionExpiry < Date.now())) {
+            return res.status(402).json({
+                error: 'Ad View Required',
+                message: 'Please complete the ad view to unlock this stream for 4 hours.'
+            });
+        }
+
+        const stat = fs.statSync(link.filePath); // Restore stat definition here
+
+        // --- Decryption Logic for Non-SW Clients (LAN/Mobile) ---
+        const shouldDecrypt = req.query.decrypt === 'true';
+        const providedKey = req.query.key as string;
+
+        if (shouldDecrypt) {
+            if (!providedKey) return res.status(400).json({ error: 'Missing key for decryption' });
+
+            // Disable Range for complexity reasons (CTR random access requires IV math)
+            // We stream the whole file with 200 OK. Browsers handle this, just seeking is limited.
+            const head = {
+                'Content-Length': stat.size, // Size is same (CTR preserves size)
+                'Content-Type': link.map.mimeType || 'video/mp4',
+                'Access-Control-Allow-Origin': '*'
+            };
+            res.writeHead(200, head);
+
+            try {
+                const keyBuf = Buffer.from(providedKey, 'hex');
+                const ivBuf = Buffer.from(link.map.iv, 'hex');
+
+                const decipher = crypto.createDecipheriv('aes-256-ctr', keyBuf, ivBuf);
+
+                // Handle pipe errors
+                const readStream = fs.createReadStream(link.filePath);
+
+                readStream.on('error', (e) => {
+                    console.error("Read Error:", e);
+                    res.end();
+                });
+
+                readStream.pipe(decipher).pipe(res);
+            } catch (e) {
+                console.error("Decryption init failed:", e);
+                res.status(500).end();
+            }
+
+            // Tracking
+            link.activeStreams++;
+            req.on('close', () => {
+                link.activeStreams = Math.max(0, link.activeStreams - 1);
+            });
+            return;
+        }
+
+        // Standard Encrypted Stream (for Service Worker)
+        const fileSize = stat.size;
+        const range = req.headers.range;
+
+        if (range) {
+            const parts = range.replace(/bytes=/, "").split("-");
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const chunksize = (end - start) + 1;
+
+            const file = fs.createReadStream(link.filePath, { start, end });
+            const head = {
+                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': chunksize,
+                'Content-Type': 'application/octet-stream',
+                'Access-Control-Allow-Origin': '*'
+            };
+
+            res.writeHead(206, head);
+            file.pipe(res);
+        } else {
+            const head = {
+                'Content-Length': fileSize,
+                'Content-Type': 'application/octet-stream',
+                'Access-Control-Allow-Origin': '*'
+            };
+            res.writeHead(200, head);
+            fs.createReadStream(link.filePath).pipe(res);
+        }
+
+        // Simple load tracking (approximate)
+        link.activeStreams++;
+        req.on('close', () => {
+            link.activeStreams = Math.max(0, link.activeStreams - 1);
+        });
+    });
+
+    //GET /stream/:id/subtitle/:lang
+    app.get('/stream/:id/subtitle/:lang', (req: Request, res: Response) => {
+        const { id, lang } = req.params;
+        // Simple validation
+        if (!/^[a-z0-9]+$/i.test(id) || !/^[a-z]+$/i.test(lang)) return res.status(400).end();
+
+        // Try vtt then srt
+        let subPath = path.join(node.dataDir, `${id}_${lang}.vtt`);
+        if (!fs.existsSync(subPath)) {
+            subPath = path.join(node.dataDir, `${id}_${lang}.srt`);
+        }
+
+        if (fs.existsSync(subPath)) {
+            res.setHeader('Access-Control-Allow-Origin', '*');
+
+            if (subPath.endsWith('.srt')) {
+                try {
+                    const srt = fs.readFileSync(subPath, 'utf-8');
+                    const vtt = "WEBVTT\n\n" + srt.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+                    res.setHeader('Content-Type', 'text/vtt');
+                    return res.send(vtt);
+                } catch (e) { return res.status(500).end(); }
+            }
+
+            res.setHeader('Content-Type', 'text/vtt'); // Force VTT mime even for SRT to trick validation? No.
+            res.sendFile(subPath);
+        } else {
+            res.status(404).end();
+        }
+    });
+
+    //GET /stream/user/progress
+    app.get('/stream/user/progress', async (req: Request, res: Response) => {
+        const { sourceId, source = 'tmdb', season, episode, wallet } = req.query;
+        if (!wallet) return res.status(400).end();
+
+        try {
+            const s = season ? parseInt(season as string) : 0;
+            const e = episode ? parseInt(episode as string) : 0;
+
+            const { ethers } = await import('ethers');
+            const itemWaraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
+
+            const progress = await node.prisma.playbackProgress.findUnique({
+                where: {
+                    waraId_season_episode_viewerWallet: {
+                        waraId: itemWaraId,
+                        season: s,
+                        episode: e,
+                        viewerWallet: wallet as string
+                    }
+                }
+            });
+            res.json(progress);
+        } catch (err) {
+            res.json(null);
+        }
+    });
+
+    //POST /stream/user/progress
+    app.post('/stream/user/progress', async (req: Request, res: Response) => {
+        const { sourceId, source = 'tmdb', season, episode, wallet, currentTime, duration, isEnded } = req.body;
+        if (!sourceId || !wallet) return res.status(400).end();
+
+        try {
+            const s = season ? parseInt(season) : 0;
+            const e = episode ? parseInt(episode) : 0;
+
+            const { ethers } = await import('ethers');
+            const itemWaraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
+
+            await node.prisma.playbackProgress.upsert({
+                where: {
+                    waraId_season_episode_viewerWallet: {
+                        waraId: itemWaraId,
+                        season: s,
+                        episode: e,
+                        viewerWallet: wallet
+                    }
+                },
+                update: {
+                    currentTime: parseFloat(currentTime),
+                    duration: parseFloat(duration),
+                    watchedCount: isEnded ? { increment: 1 } : undefined,
+                    updatedAt: new Date()
+                },
+                create: {
+                    waraId: itemWaraId,
+                    sourceId: String(sourceId),
+                    season: s,
+                    episode: e,
+                    viewerWallet: wallet,
+                    currentTime: parseFloat(currentTime),
+                    duration: parseFloat(duration),
+                    watchedCount: isEnded ? 1 : 0
+                }
+            });
+            res.json({ success: true });
+        } catch (err) {
+            res.status(500).json({ error: 'Failed to save progress' });
+        }
+    });
+
+    //POST /stream/proof/submit
+    app.post('/stream/proof/submit', async (req: Request, res: Response) => {
         const { campaignId, viewerAddress, uploaderWallet, signature, linkId, contentHash } = req.body;
 
         if (campaignId === undefined || !viewerAddress || !uploaderWallet || !signature || !linkId || !contentHash) {
@@ -459,8 +459,8 @@ export const setupStreamRoutes = (app: Express, node: WaraNode) => {
         }
     });
 
-    // POST /wara/proof/premium - Store Premium View Proof (for Subscriptions)
-    app.post('/wara/proof/premium', async (req: Request, res: Response) => {
+    //POST /stream/proof/premium
+    app.post('/stream/proof/premium', async (req: Request, res: Response) => {
         const { wallet, signature, nonce, linkId, contentHash, hoster } = req.body;
         if (!wallet || !signature || !nonce || !linkId) {
             return res.status(400).json({ error: "Missing premium proof data" });

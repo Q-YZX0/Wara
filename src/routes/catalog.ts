@@ -1,5 +1,4 @@
 import { Express, Request, Response } from 'express';
-import { ethers } from 'ethers';
 import { WaraNode } from '../node';
 import { getMediaMetadata, searchTMDB, getSeasonDetails } from '../tmdb';
 import * as fs from 'fs';
@@ -84,7 +83,7 @@ export const setupCatalogRoutes = (app: Express, node: WaraNode) => {
             const linkData: any = {
                 linkId: link.id,
                 title: link.map.title,
-                endpoint: `${baseUrl}/wara/${link.id}`,
+                endpoint: `${baseUrl}/stream/${link.id}`,
                 key: link.key
             };
 

@@ -8,7 +8,6 @@ export const setupRegistryRoutes = (app: Express, node: WaraNode) => {
     // --- Blockchain Identity Endpoints (Muggi Registry) ---
 
     // POST /api/registry/register
-    // POST /api/registry/register
     app.post('/api/registry/register', async (req, res) => {
         const { name } = req.body;
         const authToken = req.headers['x-wara-token'] as string;

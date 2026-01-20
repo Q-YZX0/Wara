@@ -56,7 +56,7 @@ export async function getMediaMetadata(prisma: PrismaClient, sourceId: string, t
                 console.log(`[P2P] Neighborhood Discovery: Searching ${targets.length} peers for ${waraId}...`);
 
                 const results = await Promise.allSettled(targets.map(async (peer) => {
-                    const res = await fetch(`${peer.endpoint}/api/media/wara/${waraId}`, {
+                    const res = await fetch(`${peer.endpoint}/api/media/stream/${waraId}`, {
                         signal: (AbortSignal as any).timeout ? (AbortSignal as any).timeout(3000) : undefined
                     });
                     if (res.ok) {

@@ -1,10 +1,21 @@
 import { Express, Request, Response } from 'express';
-import { WaraNode } from '../node'; // Assuming node.ts is in parent dir
+import { WaraNode } from '../node';
+import { ethers } from 'ethers';
+import { decryptPayload } from '../encryption';
+import fs from 'fs';
+import path from 'path';
+
+import { AD_MANAGER_ADDRESS, AD_MANAGER_ABI } from '../contracts';
+import { LINK_REGISTRY_ADDRESS } from '../contracts';
+import { ERC20_ABI, WARA_TOKEN_ADDRESS } from '../contracts';
+import { SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI } from '../contracts';
+const fetch = require('node-fetch');
+// Utility
 
 export const setupWalletRoutes = (app: Express, node: WaraNode) => {
 
     // ==========================================
-    // WALLET & BLOCKCHAIN API
+    // WALLET & BLOCKCHAIN API  
     // ==========================================
 
     // GET /api/wallet/balances?address=0x... (Legacy - public)
@@ -13,9 +24,6 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
         if (!address) return res.status(400).json({ error: 'Missing address' });
 
         try {
-            const { ethers } = await import('ethers');
-            const { ERC20_ABI, WARA_TOKEN_ADDRESS } = await import('../contracts');
-
             // Normalize address - try to fix checksum, fallback to original
             let normalizedAddress: string;
             try {
@@ -60,8 +68,6 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
                 return res.status(404).json({ error: 'User not found or no wallet linked' });
             }
 
-            const { ethers } = await import('ethers');
-            const { ERC20_ABI, WARA_TOKEN_ADDRESS } = await import('../contracts');
 
             const rpcUrl = process.env.RPC_URL;
             const provider = new ethers.JsonRpcProvider(rpcUrl);
@@ -97,8 +103,6 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
         if (!from || !to || !amount) return res.status(400).json({ error: 'Missing fields' });
 
         try {
-            const { ethers } = await import('ethers');
-            const { ERC20_ABI, WARA_TOKEN_ADDRESS } = await import('../contracts');
             // const { getLocalUserWallet } = await import('./node'); // Removed import
 
             // 1. Get User's Wallet (Requires decryping PK with password)
@@ -133,12 +137,7 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
         if (!walletAddress) return res.status(400).json({ error: 'Missing wallet address' });
 
         try {
-            const { ethers } = await import('ethers');
-            const { AD_MANAGER_ADDRESS, AD_MANAGER_ABI } = await import('../contracts');
-            const fs = await import('fs');
-            const path = await import('path');
-            const fetch = require('node-fetch'); // Ensure fetch available
-
+            // Ensure fetch available
             // 1. Authenticate & Get Signer
             let signer = node.getAuthenticatedSigner(req);
             // Fallback: If no session, try explicit auth with password
@@ -152,8 +151,6 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
             try {
                 // Find all remote nodes associated with this user
                 // We use the LocalProfile store or saved remote nodes
-                const { decryptPayload } = await import('../encryption'); // Utility
-
                 // We assume user tracks remote nodes in DB or localStorage-synced JSON
                 // Since this is backend, we check 'remote_nodes.json' if it exists or Prisma
                 const userId = req.headers['x-user-id']; // Optional hint
@@ -261,7 +258,7 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
                 filenames: [] as string[]
             };
 
-            const { SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI } = await import('../contracts');
+
 
             // 3. Filter & Prepare Batches
             for (const file of files) {
@@ -376,11 +373,6 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
         if (!walletAddress) return res.status(400).json({ error: 'Missing wallet address' });
 
         try {
-            const { ethers } = await import('ethers');
-            const { LINK_REGISTRY_ADDRESS } = await import('../contracts');
-            const fs = await import('fs');
-            const path = await import('path');
-
             // 1. Authenticate
             const wallet = await node.getLocalUserWallet(walletAddress, password);
             if (!wallet) return res.status(401).json({ error: 'Authentication failed' });
@@ -390,7 +382,6 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
 
             // 1.1 SYNC REMOTE VOTES (Unified Governor)
             try {
-                const { decryptPayload } = await import('../encryption');
                 const userProfile = await node.prisma.localProfile.findFirst({
                     where: { walletAddress: signer.address },
                     include: { remoteNodes: true }
@@ -527,10 +518,6 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
             if (!wallet) return res.status(400).json({ error: 'Missing wallet' });
 
             const targetWallet = (wallet as string).toLowerCase();
-
-            // Just read proofs from disk safely
-            const fs = await import('fs');
-            const path = await import('path');
             const proofsDir = path.join(node.dataDir, 'proofs');
 
             if (!fs.existsSync(proofsDir)) return res.json({ proofs: [] });
@@ -562,8 +549,6 @@ export const setupWalletRoutes = (app: Express, node: WaraNode) => {
             const { wallet } = req.query; // Filter by voter wallet
             if (!wallet) return res.status(400).json({ error: 'Missing wallet' });
 
-            const fs = await import('fs');
-            const path = await import('path');
             const votesDir = path.join(node.dataDir, 'votes');
             if (!fs.existsSync(votesDir)) return res.json({ votes: [] });
 

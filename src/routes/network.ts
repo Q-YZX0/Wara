@@ -1,9 +1,10 @@
 import { Express, Request, Response } from 'express';
 import { WaraNode } from '../node';
 
+//Organizar endpoints
 export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
 
-    // GET /api/network/identity (Expose technical wallet for voting rewards)
+    // GET /identity (Expose technical wallet for voting rewards)
     app.get('/api/network/identity', (req: Request, res: Response) => {
         if (!node.nodeSigner) return res.status(500).json({ error: 'Node identity not initialized' });
         res.json({
@@ -12,7 +13,6 @@ export const setupNetworkRoutes = (app: Express, node: WaraNode) => {
             publicIp: node.publicIp || null
         });
     });
-
 
     // --- Gossip / Discovery (Phonebook) ---
     app.get('/peers', async (req: Request, res: Response) => {

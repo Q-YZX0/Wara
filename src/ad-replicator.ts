@@ -227,7 +227,7 @@ export class AdReplicator {
 
             for (const node of knownNodes) {
                 try {
-                    const mapRes = await axios.get(`${node}/wara/${adId}/map`, { timeout: 5000 });
+                    const mapRes = await axios.get(`${node}/stream/${adId}/map`, { timeout: 5000 });
                     metadata = mapRes.data;
                     sourceNode = node;
                     break;
@@ -247,7 +247,7 @@ export class AdReplicator {
                 console.log(`[AdReplicator] Downloading VIDEO for ${adId} (Eligible)...`);
 
                 try {
-                    const streamUrl = `${sourceNode}/wara/${adId}/stream`;
+                    const streamUrl = `${sourceNode}/stream/${adId}`;
                     const response = await axios.get(streamUrl, {
                         responseType: 'arraybuffer',
                         timeout: 60000

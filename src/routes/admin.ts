@@ -19,7 +19,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
             node.registerLink(result.map.id, result.encryptedPath, result.map, result.key);
 
             const effectiveHost = (node as any).publicIp ? (node as any).publicIp : 'localhost';
-            const endpointWithKey = `http://${effectiveHost}:${node.port}/wara/${result.map.id}#${result.key}`;
+            const endpointWithKey = `http://${effectiveHost}:${node.port}/stream/${result.map.id}#${result.key}`;
 
             res.json({
                 success: true,
@@ -68,7 +68,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
                 // Priority: nodeName (if registered) > nodeAddress (technical wallet)
                 const nodeAny = node as any;
                 const nodeIdentifier = nodeAny.nodeName || nodeAny.nodeAddress || 'unknown';
-                const portableUrl = `http://${nodeIdentifier}/wara/${result.map.id}#${result.key}`;
+                const portableUrl = `http://${nodeIdentifier}/stream/${result.map.id}#${result.key}`;
 
                 res.json({
                     success: true,
@@ -333,7 +333,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
     // --- NEW: Mirror Endpoint (Replication) ---
     app.post('/admin/mirror', node.requireAuth, async (req: Request, res: Response) => {
         try {
-            const { outputUrl } = req.body; // e.g. "http://192.168.1.5:21746/wara/abc12345"
+            const { outputUrl } = req.body; // e.g. "http://192.168.1.5:21746/stream/abc12345"
             if (!outputUrl) return res.status(400).json({ error: "Missing outputUrl" });
 
             console.log(`[WaraNode] Mirroring content from ${outputUrl}...`);
@@ -373,7 +373,7 @@ export const setupAdminRoutes = (app: Express, node: WaraNode) => {
             const effectiveHost = node.publicIp ? node.publicIp : 'localhost';
             const responseMap = {
                 ...map,
-                publicEndpoint: `http://${effectiveHost}:${node.port}/wara/${map.id}`
+                publicEndpoint: `http://${effectiveHost}:${node.port}/stream/${map.id}`
             };
 
             res.json({

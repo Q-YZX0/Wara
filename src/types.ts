@@ -24,7 +24,7 @@ export interface WaraMap {
     hash: string; // SHA-256 of original content
 
     // Access
-    publicEndpoint: string; // e.g., "http://localhost:3000/wara/{id}/stream"
+    publicEndpoint: string; // e.g., "http://localhost:3000/stream/{id}/stream"
 
     // Content Metadata (Semantic)
     mediaInfo?: {

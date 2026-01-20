@@ -10,96 +10,26 @@ export const setupMediaRoutes = (node: WaraNode) => {
     // Contrato en modo lectura
     const registry = new ethers.Contract(MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI, node.provider);
 
-    // GET /api/media/config
-    // Returns contract address and owner for UI adaptation
-    router.get('/config', async (req: Request, res: Response) => {
-        try {
-            const owner = await registry.owner();
-            res.json({
-                registryAddress: MEDIA_REGISTRY_ADDRESS,
-                ownerAddress: owner
-            });
-        } catch (e) {
-            res.status(500).json({ error: "Failed to fetch registry config" });
-        }
-    });
-
-    // GET /api/media/lookup?sourceId=550&source=tmdb
-    // Busca si una película existe en el registro oficial
-    router.get('/lookup', async (req: Request, res: Response) => {
-        try {
-            const { sourceId, source = 'tmdb' } = req.query;
-            if (!sourceId) return res.status(400).json({ error: "Missing sourceId" });
-
-            // exists(source, externalId) -> returns [bool exists, bytes32 id]
-            const [found, mediaId] = await registry.exists(String(source), String(sourceId));
-
-            if (!found) return res.json({ found: false });
-
-            const media = await registry.getMedia(mediaId);
-
-            res.json({
-                found: true,
-                mediaId: media.id,
-                title: media.title,
-                metadataHash: media.metadataHash,
-                active: media.active
-            });
-
-        } catch (e: any) {
-            console.error("[Media] Lookup error:", e);
-            res.json({ found: false, error: "Not registered in blockchain" });
-        }
-    });
-
-    // GET /api/media/proposals (ADMIN ONLY)
-    router.get('/proposals', node.requireAuth, async (req: Request, res: Response) => {
-        try {
-            const status = req.query.status as string || 'pending_dao';
-            const proposals = await node.prisma.media.findMany({
-                where: { status: status },
-                orderBy: { createdAt: 'desc' }
-            });
-            res.json(proposals);
-        } catch (e) {
-            res.status(500).json({ error: "Failed to fetch proposals" });
-        }
-    });
-
-    // POST /api/media/review (ADMIN ONLY)
-    // Aprueba o rechaza una propuesta. Si rechaza, borra el manifiesto.
-    router.post('/review', node.requireAuth, async (req: Request, res: Response) => {
-        const { waraId, status } = req.body;
-        if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: "Invalid status" });
+    // --- P2P Media Manifest Serving ---
+    // GET /api/media/stream/:waraId
+    // This allows other nodes to sync rich metadata (overview, posters) without TMDB
+    router.get('/stream/:waraId', async (req: Request, res: Response) => {
+        const { waraId } = req.params;
+        if (!/^[a-z0-9_-]+$/i.test(waraId)) return res.status(400).end();
 
         try {
-            const fs = require('fs');
-            const path = require('path');
-
-            const media = await node.prisma.media.update({
-                where: { waraId },
-                data: { status }
-            });
-
-            if (status === 'rejected') {
-                const manifestPath = path.join(node.dataDir, 'media', `${waraId}.json`);
-                if (fs.existsSync(manifestPath)) {
-                    fs.unlinkSync(manifestPath);
-                    console.log(`[Media] Burned Sovereign Manifest for rejected media: ${waraId}`);
-                }
-                // Optional: We could also update associated links to be inactive, but the user asked about "ese archivo"
+            const media = await node.prisma.media.findUnique({ where: { waraId } });
+            if (!media || media.status === 'rejected') {
+                return res.status(404).json({ error: "Media not found or rejected" });
             }
-
-            res.json({ success: true, status: media.status });
-        } catch (e: any) {
-            console.error("[Media] Review Error:", e);
-            res.status(500).json({ error: "Review failed", details: e.message });
+            res.json(media);
+        } catch (e) {
+            res.status(500).json({ error: "Internal error" });
         }
     });
 
     // POST /api/media/register 
-    // - Admin: Direct registration if adminKey provided
-    // - User: DAO Proposal if authToken provided
+    // - User: DAO Proposal
     router.post('/register', async (req: Request, res: Response) => {
         try {
             const { sourceId, source = 'tmdb', type = 'movie' } = req.body;
@@ -204,36 +134,62 @@ export const setupMediaRoutes = (node: WaraNode) => {
         }
     });
 
-    // --- P2P Media Manifest Serving ---
-    // This allows other nodes to sync rich metadata (overview, posters) without TMDB
-    router.get('/wara/:waraId', async (req: Request, res: Response) => {
-        const { waraId } = req.params;
-        if (!/^[a-z0-9_-]+$/i.test(waraId)) return res.status(400).end();
-
+    // GET /api/media/config
+    // Returns contract address and owner for UI adaptation
+    // Creo que esta funcion no tiene sentido podria estar legacy (verificar)
+    router.get('/config', async (req: Request, res: Response) => {
         try {
-            const media = await node.prisma.media.findUnique({ where: { waraId } });
-            if (!media || media.status === 'rejected') {
-                return res.status(404).json({ error: "Media not found or rejected" });
-            }
-            res.json(media);
+            const owner = await registry.owner();
+            res.json({
+                registryAddress: MEDIA_REGISTRY_ADDRESS,
+                ownerAddress: owner
+            });
         } catch (e) {
-            res.status(500).json({ error: "Internal error" });
+            res.status(500).json({ error: "Failed to fetch registry config" });
         }
     });
 
-    // --- NEW: Serving Wara Manifests (For P2P discovery) ---
-    // This allows peers to fetch metadata by the Global on-chain waraId
-    router.get('/wara/:waraId', (req: Request, res: Response) => {
-        const { waraId } = req.params;
+    // GET /api/media/lookup?sourceId=550&source=tmdb
+    // Busca si una película existe en el registro oficial
+    router.get('/lookup', async (req: Request, res: Response) => {
+        try {
+            const { sourceId, source = 'tmdb' } = req.query;
+            if (!sourceId) return res.status(400).json({ error: "Missing sourceId" });
 
-        // Search in active links
-        for (const link of node.links.values()) {
-            if (link.map.waraId === waraId) {
-                return res.json(link.map);
-            }
+            // exists(source, externalId) -> returns [bool exists, bytes32 id]
+            const [found, mediaId] = await registry.exists(String(source), String(sourceId));
+
+            if (!found) return res.json({ found: false });
+
+            const media = await registry.getMedia(mediaId);
+
+            res.json({
+                found: true,
+                mediaId: media.id,
+                title: media.title,
+                metadataHash: media.metadataHash,
+                active: media.active
+            });
+
+        } catch (e: any) {
+            console.error("[Media] Lookup error:", e);
+            res.json({ found: false, error: "Not registered in blockchain" });
         }
+    });
 
-        res.status(404).json({ error: "Manifest not found on this node" });
+    // GET /api/media/proposals
+    // Obtiene las propuestas de contenido
+    router.get('/proposals', node.requireAuth, async (req: Request, res: Response) => {
+        try {
+            const status = req.query.status as string || 'pending_dao';
+            const proposals = await node.prisma.media.findMany({
+                where: { status: status },
+                orderBy: { createdAt: 'desc' }
+            });
+            res.json(proposals);
+        } catch (e) {
+            res.status(500).json({ error: "Failed to fetch proposals" });
+        }
     });
 
     // --- GOVERNANCE (Content Curation) ---
@@ -310,6 +266,38 @@ export const setupMediaRoutes = (node: WaraNode) => {
         } catch (e: any) {
             console.error("[Governance] Status Error:", e);
             res.status(500).json({ error: e.message });
+        }
+    });
+
+    // POST /api/media/review
+    // Aprueba o rechaza una propuesta. Si rechaza, borra el manifiesto.
+    // Creo que esta funcion no tiene sentido podria ser igual a status
+    router.post('/review', node.requireAuth, async (req: Request, res: Response) => {
+        const { waraId, status } = req.body;
+        if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: "Invalid status" });
+
+        try {
+            const fs = require('fs');
+            const path = require('path');
+
+            const media = await node.prisma.media.update({
+                where: { waraId },
+                data: { status }
+            });
+
+            if (status === 'rejected') {
+                const manifestPath = path.join(node.dataDir, 'media', `${waraId}.json`);
+                if (fs.existsSync(manifestPath)) {
+                    fs.unlinkSync(manifestPath);
+                    console.log(`[Media] Burned Sovereign Manifest for rejected media: ${waraId}`);
+                }
+                // Optional: We could also update associated links to be inactive, but the user asked about "ese archivo"
+            }
+
+            res.json({ success: true, status: media.status });
+        } catch (e: any) {
+            console.error("[Media] Review Error:", e);
+            res.status(500).json({ error: "Review failed", details: e.message });
         }
     });
 

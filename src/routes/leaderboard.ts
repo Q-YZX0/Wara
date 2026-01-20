@@ -1,4 +1,4 @@
-import { Express, Request, Response } from 'express';
+import { Express } from 'express';
 import { WaraNode } from '../node';
 
 export const setupLeaderboardRoutes = (app: Express, node: WaraNode) => {
