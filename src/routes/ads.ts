@@ -1,20 +1,18 @@
 import { Router, Request, Response } from 'express';
 import { WaraNode } from '../node';
-import { ethers } from 'ethers'; // Assuming node.ts is in parent dir
-import { AD_MANAGER_ABI, AD_MANAGER_ADDRESS, WARA_TOKEN_ADDRESS, ERC20_ABI } from '../contracts';
+import { ethers } from 'ethers';
+
 
 export const setupAdsRoutes = (node: WaraNode) => {
     const router = Router();
+    const contract = node.adManager;
+    const tokenContract = node.tokenContract;
     // GET /api/ads/my-campaigns?wallet=0x...
     router.get('/my-campaigns', async (req: Request, res: Response) => {
         const wallet = req.query.wallet as string;
         if (!wallet) return res.json([]);
 
         try {
-
-            const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-            const contract = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, provider);
-
             const campaignsRaw = await contract.getCampaignsByAdvertiser(wallet);
 
             const campaigns = campaignsRaw.map((item: any) => {
@@ -43,8 +41,6 @@ export const setupAdsRoutes = (node: WaraNode) => {
     router.get('/cost', async (req: Request, res: Response) => {
         try {
             const duration = Number(req.query.duration || 15);
-            const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-            const contract = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, provider);
 
             const cost = await contract.getCurrentCostPerView(duration);
             res.json({ cost: ethers.formatUnits(cost, 18) });
@@ -62,13 +58,13 @@ export const setupAdsRoutes = (node: WaraNode) => {
         try {
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
 
-            const token = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, userSigner);
-            const manager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, userSigner);
+            const token = tokenContract.connect(userSigner) as ethers.Contract;
+            const manager = contract.connect(userSigner) as ethers.Contract;
 
             const budgetWei = ethers.parseUnits(budget.toString(), 18);
 
             console.log(`[Ads] Approving ${budget} WARA for ${wallet}...`);
-            const txApprove = await token.approve(AD_MANAGER_ADDRESS, budgetWei);
+            const txApprove = await token.approve(await contract.getAddress(), budgetWei);
             await txApprove.wait();
 
             console.log(`[Ads] Creating Campaign for ${videoHash}...`);
@@ -89,7 +85,7 @@ export const setupAdsRoutes = (node: WaraNode) => {
         const { wallet, id } = req.body;
         try {
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
-            const manager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, userSigner);
+            const manager = contract.connect(userSigner) as ethers.Contract;
 
             const tx = await manager.cancelCampaign(id);
             await tx.wait();
@@ -104,7 +100,7 @@ export const setupAdsRoutes = (node: WaraNode) => {
         const { wallet, id } = req.body;
         try {
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
-            const manager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, userSigner);
+            const manager = contract.connect(userSigner) as ethers.Contract;
 
             const tx = await manager.togglePause(id);
             await tx.wait();
@@ -119,7 +115,7 @@ export const setupAdsRoutes = (node: WaraNode) => {
         const { wallet, id, reason } = req.body;
         try {
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
-            const manager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, userSigner);
+            const manager = contract.connect(userSigner) as ethers.Contract;
 
             console.log(`[Ads] Reporting Ad #${id} by ${wallet}, Reason: ${reason}`);
             const tx = await manager.reportAd(id, reason);
@@ -138,13 +134,13 @@ export const setupAdsRoutes = (node: WaraNode) => {
         try {
             const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
 
-            const token = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, userSigner);
-            const manager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, userSigner);
+            const token = tokenContract.connect(userSigner) as ethers.Contract;
+            const manager = contract.connect(userSigner) as ethers.Contract;
 
             const amountWei = ethers.parseUnits(amount.toString(), 18);
 
             // Approve
-            const txApprove = await token.approve(AD_MANAGER_ADDRESS, amountWei);
+            const txApprove = await token.approve(await contract.getAddress(), amountWei);
             await txApprove.wait();
 
             // Deposit

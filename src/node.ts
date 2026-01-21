@@ -17,7 +17,8 @@ import {
     AD_MANAGER_ADDRESS, AD_MANAGER_ABI,
     MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI,
     WARA_AIRDROP_ADDRESS, WARA_AIRDROP_ABI,
-    WARA_DAO_ADDRESS, WARA_DAO_ABI
+    WARA_DAO_ADDRESS, WARA_DAO_ABI,
+    WARA_TOKEN_ADDRESS, ERC20_ABI
 } from './contracts';
 import { RPCManager } from './rpc-manager';
 import { getMediaMetadata } from './tmdb';
@@ -145,6 +146,7 @@ export class WaraNode {
     public adManager: ethers.Contract;
     public airdropContract: ethers.Contract;
     public daoContract: ethers.Contract;
+    public tokenContract: ethers.Contract;
     private lastSyncedBlock: number = 0;
     private isChainSyncing: boolean = false;
     private chainSyncInterval: NodeJS.Timeout | null = null;
@@ -178,6 +180,7 @@ export class WaraNode {
         this.adManager = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, this.provider);
         this.airdropContract = new ethers.Contract(WARA_AIRDROP_ADDRESS, WARA_AIRDROP_ABI, this.provider);
         this.daoContract = new ethers.Contract(WARA_DAO_ADDRESS, WARA_DAO_ABI, this.provider);
+        this.tokenContract = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, this.provider);
 
 
         this.port = port;
@@ -308,6 +311,7 @@ export class WaraNode {
                 this.adManager = this.adManager.connect(this.nodeSigner) as any;
                 this.airdropContract = this.airdropContract.connect(this.nodeSigner) as any;
                 this.daoContract = this.daoContract.connect(this.nodeSigner) as any;
+                this.tokenContract = this.tokenContract.connect(this.nodeSigner) as any;
 
                 console.log(`[WaraNode] Signing Address: ${this.nodeSigner.address}`);
                 if (this.nodeOwner) console.log(`[WaraNode] Node Owner: ${this.nodeOwner}`);
@@ -338,6 +342,7 @@ export class WaraNode {
             this.adManager = this.adManager.connect(this.nodeSigner) as any;
             this.airdropContract = this.airdropContract.connect(this.nodeSigner) as any;
             this.daoContract = this.daoContract.connect(this.nodeSigner) as any;
+            this.tokenContract = this.tokenContract.connect(this.nodeSigner) as any;
 
             console.log(`[WaraNode] New Technical Identity created: ${this.nodeSigner.address}`);
         }
@@ -609,16 +614,35 @@ export class WaraNode {
         const remote = req.socket.remoteAddress;
         const providedKey = req.headers['x-wara-key'];
 
-        // 1. Allow Localhost (Priority for Dev/Local App)
-        if (remote === '::1' || remote === '127.0.0.1' || remote === '::ffff:127.0.0.1') {
-            return next();
-        }
-
-        // 2. Allow if Key is correct
+        // 1. Admin Key Bypass (Superuser) - Works from Remote or Local
         if (providedKey === this.adminKey) {
             return next();
         }
 
+        // 2. Strict Localhost Check
+        const isLocal = remote === '::1' || remote === '127.0.0.1' || remote === '::ffff:127.0.0.1';
+
+        if (isLocal) {
+            // Localhost requires Active User Session (Login) OR Admin Key
+            // We already checked Admin Key above. So now we check for Session.
+            const authToken = (req.headers['x-auth-token'] || req.headers['x-wara-token']) as string;
+
+            // Check if token exists and is valid in activeWallets (Full Wallet Session) or userSessions (Light Session)
+            if (authToken && (this.activeWallets.has(authToken) || this.userSessions.has(authToken))) {
+                return next();
+            }
+
+            // Allow /admin/status to pass on Localhost without auth for identifying "Locked" state
+            // This is critical for the Dashboard to show the "Connect Wallet" screen instead of a network error.
+            if (req.path === '/api/admin/status' || req.originalUrl.includes('/admin/status')) {
+                return next();
+            }
+
+            console.warn(`[WaraNode] Localhost admin attempt blocked. No active session.`);
+            return res.status(401).json({ error: 'Local Admin requires Login' });
+        }
+
+        // 3. Block Remote without Key
         console.warn(`[WaraNode] Blocked unauthorized admin attempt from ${remote}`);
         res.status(403).json({ error: 'Access denied. Valid Admin Key required.' });
     }

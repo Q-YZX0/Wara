@@ -1,13 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { ethers } from 'ethers';
 import { WaraNode } from '../node';
-import { SUBSCRIPTIONS_ABI, SUBSCRIPTION_ADDRESS, WARA_TOKEN_ADDRESS, ERC20_ABI } from '../contracts';
+import { WARA_TOKEN_ADDRESS, ERC20_ABI } from '../contracts';
 
 export const setupSubscriptionRoutes = (node: WaraNode) => {
     const router = Router();
 
-    // Contract instance for READ operations (uses node provider directly)
-    const readContract = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI, node.provider);
+    // Contract instance for READ operations (reuses node's instance)
+    const readContract = node.subContract;
 
     // GET /api/subscription/stats
     router.get('/stats', async (req: Request, res: Response) => {
@@ -94,7 +94,7 @@ export const setupSubscriptionRoutes = (node: WaraNode) => {
             const tokenContract = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, connectedSigner);
 
             // 2. Subscription Contract (Write access needed for subscribe)
-            const subContract = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI, connectedSigner);
+            const subContract = node.subContract.connect(connectedSigner) as ethers.Contract;
 
             // READ operation using the PROVIDER (safer for "call")
             const readToken = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, node.provider);
@@ -103,12 +103,12 @@ export const setupSubscriptionRoutes = (node: WaraNode) => {
             const price = await readContract.getCurrentPrice();
 
             console.log(`[Subscription] Checking allowance...`);
-            const allowance = await readToken.allowance(connectedSigner.address, SUBSCRIPTION_ADDRESS);
+            const allowance = await readToken.allowance(connectedSigner.address, await node.subContract.getAddress());
 
             if (allowance < price) {
                 console.log(`[Subscription] Approving WARA...`);
                 // WRITE operation using the SIGNER
-                const txApprove = await tokenContract.approve(SUBSCRIPTION_ADDRESS, ethers.MaxUint256);
+                const txApprove = await tokenContract.approve(await node.subContract.getAddress(), ethers.MaxUint256);
                 await txApprove.wait();
                 console.log(`[Subscription] Approved: ${txApprove.hash}`);
             }

@@ -1,14 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { ethers } from 'ethers';
 import { WaraNode } from '../node';
-import { MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI } from '../contracts';
 import { getMediaMetadata } from '../tmdb';
 
 export const setupMediaRoutes = (node: WaraNode) => {
     const router = Router();
 
-    // Contrato en modo lectura
-    const registry = new ethers.Contract(MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI, node.provider);
+    // Contrato en modo lectura (Singleton del nodo)
+    const registry = node.mediaRegistry;
 
     // --- P2P Media Manifest Serving ---
     // GET /api/media/stream/:waraId
@@ -141,7 +140,7 @@ export const setupMediaRoutes = (node: WaraNode) => {
         try {
             const owner = await registry.owner();
             res.json({
-                registryAddress: MEDIA_REGISTRY_ADDRESS,
+                registryAddress: await registry.getAddress(),
                 ownerAddress: owner
             });
         } catch (e) {
@@ -312,7 +311,7 @@ export const setupMediaRoutes = (node: WaraNode) => {
             if (!wallet) return res.status(401).json({ error: "Session invalid" });
 
             const userSigner = wallet.connect(node.provider);
-            const registry = new ethers.Contract(MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI, userSigner);
+            const registry = node.mediaRegistry.connect(userSigner) as ethers.Contract;
 
             console.log(`[Governance] Voting ${side} on ${source}:${sourceId} by ${userSigner.address}...`);
             const tx = await registry.vote(source, sourceId, side);
@@ -336,7 +335,7 @@ export const setupMediaRoutes = (node: WaraNode) => {
             if (!wallet) return res.status(401).json({ error: "Session invalid" });
 
             const userSigner = wallet.connect(node.provider);
-            const registry = new ethers.Contract(MEDIA_REGISTRY_ADDRESS, MEDIA_REGISTRY_ABI, userSigner);
+            const registry = node.mediaRegistry.connect(userSigner) as ethers.Contract;
 
             console.log(`[Governance] Resolving ${source}:${sourceId} by ${userSigner.address}...`);
             const tx = await registry.resolveProposal(source, sourceId, title, "meta_hash_placeholder");

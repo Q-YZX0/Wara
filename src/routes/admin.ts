@@ -276,7 +276,7 @@ export const setupAdminRoutes = (node: WaraNode) => {
         res.json({ success: true, message: 'Sync started' });
     });
 
-    // POST /admin/trackers
+    // POST /admin/trackers (Bulk Replace)
     router.post('/trackers', node.requireAuth, (req: Request, res: Response) => {
         const { trackers } = req.body;
         if (!Array.isArray(trackers)) return res.status(400).json({ error: 'trackers must be an array' });
@@ -291,6 +291,27 @@ export const setupAdminRoutes = (node: WaraNode) => {
         if (nodeAny.startHeartbeat) nodeAny.startHeartbeat();
 
         res.json({ success: true, trackers: nodeAny.trackers });
+    });
+
+    // GET /admin/trackers (List)
+    router.get('/trackers', node.requireAuth, (req: Request, res: Response) => {
+        res.json({ trackers: node.getTrackers() });
+    });
+
+    // PUT /admin/trackers (Add One)
+    router.put('/trackers', node.requireAuth, (req: Request, res: Response) => {
+        const { url } = req.body;
+        if (!url) return res.status(400).json({ error: 'Missing tracker URL' });
+        node.addTracker(url);
+        res.json({ success: true, trackers: node.getTrackers() });
+    });
+
+    // DELETE /admin/trackers (Remove One)
+    router.delete('/trackers', node.requireAuth, (req: Request, res: Response) => {
+        const { url } = req.body; // Accepting body for DELETE
+        if (!url) return res.status(400).json({ error: 'Missing tracker URL' });
+        node.removeTracker(url);
+        res.json({ success: true, trackers: node.getTrackers() });
     });
 
     // --- NEW: Mirror Endpoint (Replication) ---

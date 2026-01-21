@@ -5,21 +5,22 @@ import path from 'path';
 
 export const setupAirdropRoutes = (node: WaraNode) => {
     const router = Router();
+    const contract = node.airdropContract;
     // GET /state
     router.get('/state', async (req: Request, res: Response) => {
         try {
-            const currentCycleId = await node.airdropContract.currentCycleId();
-            const totalRegistered = await node.airdropContract.totalRegistered();
-            const lastCycleTime = await node.airdropContract.lastCycleTime();
+            const currentCycleId = await contract.currentCycleId();
+            const totalRegistered = await contract.totalRegistered();
+            const lastCycleTime = await contract.lastCycleTime();
 
             let userRegistered = false;
             let userClaimed = false;
 
             const userSigner = node.getAuthenticatedSigner(req);
             if (userSigner) {
-                userRegistered = await node.airdropContract.isRegistered(userSigner.address);
+                userRegistered = await contract.isRegistered(userSigner.address);
                 if (currentCycleId > 0) {
-                    userClaimed = await node.airdropContract.hasClaimed(currentCycleId, userSigner.address);
+                    userClaimed = await contract.hasClaimed(currentCycleId, userSigner.address);
                 }
             }
 
@@ -44,7 +45,7 @@ export const setupAirdropRoutes = (node: WaraNode) => {
             if (!userSigner) return res.status(401).json({ error: 'Unauthorized' });
 
             const connectedSigner = userSigner.connect(node.provider);
-            const contractWithUser = node.airdropContract.connect(connectedSigner) as any;
+            const contractWithUser = contract.connect(connectedSigner) as any;
 
             console.log(`[Airdrop] Registering user: ${userSigner.address}`);
             const tx = await contractWithUser.register();
@@ -89,7 +90,7 @@ export const setupAirdropRoutes = (node: WaraNode) => {
             if (!userSigner) return res.status(401).json({ error: 'Unauthorized' });
 
             const connectedSigner = userSigner.connect(node.provider);
-            const contractWithUser = node.airdropContract.connect(connectedSigner) as any;
+            const contractWithUser = contract.connect(connectedSigner) as any;
 
             console.log(`[Airdrop] Claiming for user: ${userSigner.address}, Cycle: ${cycleId}`);
             const tx = await contractWithUser.claim(cycleId, amount, merkleProof);

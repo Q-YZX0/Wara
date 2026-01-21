@@ -125,27 +125,6 @@ export const setupNetworkRoutes = (node: WaraNode) => {
         }
     });
 
-    // --- Tracker Management ---
-    router.get('/trackers', (req: Request, res: Response) => {
-        res.json({ trackers: node.getTrackers() });
-    });
-
-    router.post('/trackers', (req: Request, res: Response) => {
-        const { url } = req.body;
-        if (!url) return res.status(400).json({ error: 'Missing tracker URL' });
-
-        node.addTracker(url);
-        res.json({ success: true, trackers: node.getTrackers() });
-    });
-
-    router.delete('/trackers', (req: Request, res: Response) => {
-        const { url } = req.query;
-        if (!url) return res.status(400).json({ error: 'Missing tracker URL' });
-
-        node.removeTracker(String(url));
-        res.json({ success: true, trackers: node.getTrackers() });
-    });
-
     // ==========================================
     // COMMUNITY RPC PROXY (Collaborative Infrastructure)
     // ==========================================
