@@ -4,7 +4,7 @@ import { WaraMap } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI } from '../contracts';
+import { LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, AD_MANAGER_ADDRESS } from '../contracts';
 
 
 export const setupStreamRoutes = (node: WaraNode) => {
@@ -414,8 +414,8 @@ export const setupStreamRoutes = (node: WaraNode) => {
             // Reconstruct exactly as signed by User: (campaignId, uploaderWallet, viewer, contentHash, SIGNED_LINK_ID)
             // MUST MATCH SMART CONTRACT
             const messageHash = ethers.solidityPackedKeccak256(
-                ["uint256", "address", "address", "bytes32", "bytes32"],
-                [campaignId, officialUploader, viewerAddress, hexContentHash, urlLinkIdHash]
+                ["uint256", "address", "address", "bytes32", "bytes32", "uint256", "address"],
+                [campaignId, officialUploader, viewerAddress, hexContentHash, urlLinkIdHash, (await node.provider.getNetwork()).chainId, AD_MANAGER_ADDRESS]
             );
 
             const recovered = ethers.verifyMessage(ethers.getBytes(messageHash), signature);

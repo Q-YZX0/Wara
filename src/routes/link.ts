@@ -436,8 +436,8 @@ export const setupLinkRoutes = (node: WaraNode) => {
                 // UPVOTE: Sign for Hoster and relay once (The hoster picks it up)
                 const relayer = hosterAddress;
                 const messageHash = ethers.solidityPackedKeccak256(
-                    ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256"],
-                    [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp]
+                    ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
+                    [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, (await node.provider.getNetwork()).chainId, LINK_REGISTRY_ADDRESS]
                 );
                 const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
@@ -473,8 +473,8 @@ export const setupLinkRoutes = (node: WaraNode) => {
                     // Fallback: Sign for our own node and submit locally
                     const relayer = node.nodeSigner?.address || ethers.ZeroAddress;
                     const messageHash = ethers.solidityPackedKeccak256(
-                        ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256"],
-                        [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp]
+                        ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
+                        [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, (await node.provider.getNetwork()).chainId, LINK_REGISTRY_ADDRESS]
                     );
                     const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
@@ -491,8 +491,8 @@ export const setupLinkRoutes = (node: WaraNode) => {
                     const relays = await Promise.allSettled(targets.map(async (peer) => {
                         const relayer = peer.walletAddress;
                         const messageHash = ethers.solidityPackedKeccak256(
-                            ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256"],
-                            [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp]
+                            ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
+                            [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, (await node.provider.getNetwork()).chainId, LINK_REGISTRY_ADDRESS]
                         );
                         const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
@@ -535,8 +535,8 @@ export const setupLinkRoutes = (node: WaraNode) => {
             );
 
             const messageHash = ethers.solidityPackedKeccak256(
-                ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256"],
-                [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp]
+                ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
+                [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, (await node.provider.getNetwork()).chainId, LINK_REGISTRY_ADDRESS]
             );
             const recoveredAddress = ethers.verifyMessage(ethers.getBytes(messageHash), signature);
 
