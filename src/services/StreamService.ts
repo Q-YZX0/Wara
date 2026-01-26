@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { CatalogService } from './CatalogService';
 import { BlockchainService } from './BlockchainService';
 import { IdentityService } from './IdentityService';
+import { AdCampaign } from '../types';
 
 export interface StreamSession {
     token: string;
@@ -141,15 +142,15 @@ export class StreamService {
             // Try 3 random IDs
             for (let i = 0; i < 3; i++) {
                 const id = Math.floor(Math.random() * Number(maxId));
-                // @ts-ignore
-                const c = await this.blockchainService.adManager.getCampaign(id);
-                // c: [advertiser, budget, duration, videoHash, viewsRem, cat, active]
-                if (c && c[6] === true && c[4] > 0) { // active && viewsRemaining > 0
+
+                const c = await this.blockchainService.adManager.getCampaign(id) as unknown as AdCampaign;
+
+                if (c && c.active && Number(c.viewsRemaining) > 0) {
                     return {
                         id: id,
-                        videoHash: c[3],
-                        duration: c[2],
-                        advertiser: c[0]
+                        videoHash: c.videoHash,
+                        duration: Number(c.duration),
+                        advertiser: c.advertiser
                     };
                 }
             }

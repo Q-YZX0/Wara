@@ -8,13 +8,16 @@
         "build": "tsc",
         "test": "ts-node test-wara.ts",
         "start": "npx prisma db push && npx ts-node src/index.ts",
-        "bundle": "npm run build && pkg dist/index.js --targets node18-win-x64 --output wara-node.exe"
+        "bundle": "npm run build && pkg dist/index.js --targets node18-win-x64 --output wara-node.exe",
+        "update": "ts-node scripts/update_node.ts"
     },
     "keywords": [],
     "author": "YZX0",
     "license": "MIT",
     "dependencies": {
         "@prisma/client": "^5.22.0",
+        "@types/adm-zip": "^0.5.7",
+        "adm-zip": "^0.5.16",
         "axios": "^1.6.0",
         "cors": "^2.8.5",
         "ethers": "^6.9.0",

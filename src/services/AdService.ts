@@ -8,6 +8,7 @@ import { IdentityService } from './IdentityService';
 import { P2PService } from './P2PService';
 import { CatalogService } from './CatalogService';
 import { CONFIG } from '../config/config';
+import { AdCampaign } from '../types';
 
 // CONSTANTS (Refactored from ad-replicator)
 const METADATA_REPLICATION_RATE = 0.35;
@@ -33,18 +34,19 @@ export class AdService {
         if (!fs.existsSync(this.adsDir)) fs.mkdirSync(this.adsDir, { recursive: true });
     }
 
-    public init() {
+    public async init() {
         console.log('[AdService] Initializing Service...');
 
         // Load Sync State
         const syncStatePath = path.join(this.adsDir, 'sync_state.json');
-        if (fs.existsSync(syncStatePath)) {
-            try {
-                const state = JSON.parse(fs.readFileSync(syncStatePath, 'utf8'));
-                this.lastSyncedBlock = state.lastSyncedBlock || 0;
-            } catch (e) {
-                console.error('[AdService] Failed to load sync state:', e);
-            }
+        try {
+            await fs.promises.access(syncStatePath);
+            const stateData = await fs.promises.readFile(syncStatePath, 'utf8');
+            const state = JSON.parse(stateData);
+            this.lastSyncedBlock = state.lastSyncedBlock || 0;
+        } catch (e) {
+            // No state or error reading, ignore
+            // console.error('[AdService] Failed to load sync state:', e);
         }
 
         // Start Background Jobs
@@ -78,21 +80,23 @@ export class AdService {
             if (fromBlock <= currentBlock) {
                 const toBlock = Math.min(currentBlock, fromBlock + 5000);
                 const filter = contract.filters.CampaignCreated();
-                // @ts-ignore
+
                 const events = await contract.queryFilter(filter, fromBlock, toBlock);
 
                 for (const event of events) {
-                    try {
-                        const { id } = (event as any).args;
-                        console.log(`[AdService] New campaign detected: #${id}`);
-                        await this.replicateAd(Number(id));
-                    } catch (e) {
-                        console.error('[AdService] Failed to replicate ad metadata:', e);
+                    if ('args' in event) {
+                        try {
+                            const { id } = (event as any).args;
+                            console.log(`[AdService] New campaign detected: #${id}`);
+                            await this.replicateAd(Number(id));
+                        } catch (e) {
+                            console.error('[AdService] Failed to replicate ad metadata:', e);
+                        }
                     }
                 }
 
                 this.lastSyncedBlock = toBlock;
-                fs.writeFileSync(path.join(this.adsDir, 'sync_state.json'), JSON.stringify({ lastSyncedBlock: this.lastSyncedBlock }));
+                await fs.promises.writeFile(path.join(this.adsDir, 'sync_state.json'), JSON.stringify({ lastSyncedBlock: this.lastSyncedBlock }));
             }
         } catch (e: any) {
             console.warn('[AdService] Polling failed:', e.message);
@@ -104,7 +108,6 @@ export class AdService {
     private async replicateExistingAds() {
         if (!this.blockchainService.adManager) return;
         try {
-            // @ts-ignore
             const nextId = await this.blockchainService.adManager.nextCampaignId();
             const total = Number(nextId);
             if (total === 0) return;
@@ -128,8 +131,7 @@ export class AdService {
             // 0. Metadata Sharding Check
             if (!this.shouldReplicateMetadata(campaignId)) return;
 
-            // @ts-ignore
-            const campaign = await this.blockchainService.adManager.getCampaign(campaignId);
+            const campaign = await this.blockchainService.adManager.getCampaign(campaignId) as unknown as AdCampaign;
             const videoHash: string = campaign.videoHash;
 
             const adId = videoHash.includes('#') ? videoHash.split('#')[0] : videoHash;
@@ -138,10 +140,15 @@ export class AdService {
             const localWaraPath = path.join(this.adsDir, `${adId}.wara`);
 
             // Check existence
-            if (fs.existsSync(localWaraPath) && fs.existsSync(localJsonPath)) {
+            let waraExists = false;
+            let jsonExists = false;
+            try { await fs.promises.access(localWaraPath); waraExists = true; } catch (e) { }
+            try { await fs.promises.access(localJsonPath); jsonExists = true; } catch (e) { }
+
+            if (waraExists && jsonExists) {
                 // GC Check: If inactive, delete?
                 if (!campaign.active) {
-                    fs.unlinkSync(localWaraPath);
+                    try { await fs.promises.unlink(localWaraPath); } catch (e) { }
                     // fs.unlinkSync(localJsonPath); // Keep metadata?
                 }
                 return;
@@ -152,10 +159,11 @@ export class AdService {
             if (!metadata) return;
 
             // Save Metadata
-            fs.writeFileSync(localJsonPath, JSON.stringify(metadata, null, 2));
+            await fs.promises.writeFile(localJsonPath, JSON.stringify(metadata, null, 2));
 
             // 2. Download Media Check
-            if (this.shouldReplicateData(campaign, metadata)) {
+
+            if (await this.shouldReplicateData(campaign, metadata)) {
                 console.log(`[AdService] Downloading VIDEO for ${adId}...`);
                 await this.downloadVideoFromNetwork(adId, localWaraPath, metadata);
             }
@@ -178,7 +186,7 @@ export class AdService {
                 const res = await axios.get(`${peer.endpoint}/api/stream/${adId}/map`, { timeout: 3000 });
                 if (res.status === 200 && res.data) return res.data;
             } catch (e) {
-                console.error('[AdService] Failed to save sync state:', e);
+                // console.error('[AdService] Failed to save sync state:', e); // Typo in original log
             }
         }
         return null;
@@ -195,7 +203,7 @@ export class AdService {
                     timeout: 60000
                 });
 
-                fs.writeFileSync(destPath, Buffer.from(response.data));
+                await fs.promises.writeFile(destPath, Buffer.from(response.data));
 
                 // Register with Catalog Service
                 this.catalogService.registerLink(metadata.id, destPath, metadata);
@@ -215,18 +223,22 @@ export class AdService {
         return val < threshold;
     }
 
-    private shouldReplicateData(campaign: any, metadata: any): boolean {
+    private async shouldReplicateData(campaign: any, metadata: any): Promise<boolean> {
         if (!campaign.active) return false;
         if (Number(campaign.viewsRemaining) <= 0) return false;
 
         // Disk Check
         try {
             // @ts-ignore
-            const stats = fs.statfsSync(this.adsDir);
-            const usedPercent = 1 - (stats.bavail / stats.blocks);
-            if (usedPercent > DISK_THRESHOLD_PERCENT) return false;
+            // Uses FS sync originally. statfs might be missing on some nodes.
+            // We'll try to use fs.promises.statfs if available, or skip check.
+            if (fs.promises.statfs) {
+                const stats = await fs.promises.statfs(this.adsDir);
+                const usedPercent = 1 - (stats.bavail / stats.blocks);
+                if (usedPercent > DISK_THRESHOLD_PERCENT) return false;
+            }
         } catch (e) {
-            console.error('[AdService] Failed to replicate ad data:', e);
+            console.error('[AdService] Failed to replicate ad data (disk check):', e);
         }
 
         // Affinity
@@ -248,20 +260,24 @@ export class AdService {
     public async runGarbageCollection() {
         console.log("[AdService] 🧹 Running Garbage Collection...");
         try {
-            const files = fs.readdirSync(this.adsDir);
+            const files = await fs.promises.readdir(this.adsDir);
             const jsonFiles = files.filter(f => f.endsWith('.json'));
             let deletedCount = 0;
 
             for (const file of jsonFiles) {
                 const filePath = path.join(this.adsDir, file);
                 try {
-                    const stats = fs.statSync(filePath);
+                    const stats = await fs.promises.stat(filePath);
                     const ageHours = (Date.now() - stats.mtimeMs) / (1000 * 60 * 60);
 
                     if (ageHours > 720) { // 30 Days
                         const waraFile = filePath.replace('.json', '.wara');
-                        if (fs.existsSync(waraFile)) fs.unlinkSync(waraFile);
-                        fs.unlinkSync(filePath);
+                        try {
+                            await fs.promises.access(waraFile);
+                            await fs.promises.unlink(waraFile);
+                        } catch (e) { }
+
+                        await fs.promises.unlink(filePath);
                         deletedCount++;
                     }
                 } catch (e) {

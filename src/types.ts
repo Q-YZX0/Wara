@@ -63,3 +63,13 @@ export interface WaraPeer {
     isTrusted?: boolean;
     localEndpoint?: string; // LAN optimization
 }
+
+export interface AdCampaign {
+    advertiser: string;
+    budget: bigint;
+    duration: bigint;
+    videoHash: string;
+    viewsRemaining: bigint;
+    category: bigint;
+    active: boolean;
+}

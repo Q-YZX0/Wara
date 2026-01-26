@@ -155,7 +155,7 @@ export class App {
         await this.identity.init();
         await this.blockchain.init();
         await this.p2p.init();
-        this.catalog.init();
+        await this.catalog.init();
         this.ads.init();
         this.media.init(this.prisma);
         await this.oracle.start();

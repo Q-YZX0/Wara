@@ -23,9 +23,9 @@ export class CatalogService {
 
     constructor(private p2pService: P2PService) { }
 
-    public init() {
+    public async init() {
         console.log(`[Catalog] Initializing Content Catalog...`);
-        this.loadExistingLinks();
+        await this.loadExistingLinks();
         this.startGarbageCollector();
     }
 
@@ -47,6 +47,10 @@ export class CatalogService {
     }
 
     public registerLink(id: string, encryptedFilePath: string, map: WaraMap, key?: string) {
+        // Warning: This sync check is fine for runtime registration if infrequent, 
+        // but for startup we trust scanDir. 
+        // We can keep this sync or make it async if needed, but usually registerLink 
+        // is called after file is confirmed to exist.
         if (!fs.existsSync(encryptedFilePath)) {
             console.warn(`[Catalog] File not found: ${encryptedFilePath}`);
             return;
@@ -63,50 +67,68 @@ export class CatalogService {
         console.log(`[Catalog] Registered: ${map.title} (${id})`);
     }
 
-    private loadExistingLinks() {
+    private async loadExistingLinks() {
         const linksDir = path.join(CONFIG.DATA_DIR, 'links');
         const adsDir = path.join(CONFIG.DATA_DIR, 'ads');
 
-        if (!fs.existsSync(linksDir)) fs.mkdirSync(linksDir, { recursive: true });
-        if (!fs.existsSync(adsDir)) fs.mkdirSync(adsDir, { recursive: true });
+        try {
+            await fs.promises.mkdir(linksDir, { recursive: true });
+            await fs.promises.mkdir(adsDir, { recursive: true });
+        } catch (e) {
+            // If exists, ignore
+        }
 
         // Scan Standard Content
-        this.scanDir(linksDir);
+        await this.scanDir(linksDir);
         // Scan Ads
-        this.scanDir(adsDir, true);
+        await this.scanDir(adsDir, true);
     }
 
-    private scanDir(dir: string, isAd: boolean = false) {
-        const files = fs.readdirSync(dir);
-        for (const file of files) {
-            const fullPath = path.join(dir, file);
-            const stat = fs.statSync(fullPath);
+    private async scanDir(dir: string, isAd: boolean = false) {
+        try {
+            const files = await fs.promises.readdir(dir);
 
-            if (stat.isDirectory()) {
-                this.scanDir(fullPath, isAd);
-            } else if (file.endsWith('.wara')) {
-                // Found encrypted content
+            const tasks = files.map(async (file) => {
+                const fullPath = path.join(dir, file);
                 try {
-                    const mapPath = fullPath.replace('.wara', '.json');
-                    const keyPath = fullPath.replace('.wara', '.key');
+                    const stat = await fs.promises.stat(fullPath);
 
-                    if (fs.existsSync(mapPath)) {
-                        const map: WaraMap = JSON.parse(fs.readFileSync(mapPath, 'utf-8'));
+                    if (stat.isDirectory()) {
+                        await this.scanDir(fullPath, isAd);
+                    } else if (file.endsWith('.wara')) {
+                        // Found encrypted content
+                        const mapPath = fullPath.replace('.wara', '.json');
+                        const keyPath = fullPath.replace('.wara', '.key');
 
-                        let key: string | undefined = undefined;
-                        if (fs.existsSync(keyPath)) {
-                            key = fs.readFileSync(keyPath, 'utf-8').trim();
+                        try {
+                            // Check if map exists
+                            await fs.promises.access(mapPath);
+
+                            const mapContent = await fs.promises.readFile(mapPath, 'utf-8');
+                            const map: WaraMap = JSON.parse(mapContent);
+
+                            let key: string | undefined = undefined;
+                            try {
+                                await fs.promises.access(keyPath);
+                                key = (await fs.promises.readFile(keyPath, 'utf-8')).trim();
+                            } catch (e) { /* No key file */ }
+
+                            // Register (Sync is fine here as it just updates map)
+                            this.registerLink(map.id, fullPath, map, key);
+
+                        } catch (e) {
+                            // Map not found or invalid
                         }
-
-                        // Override storage path in map just in case
-                        // map.storagePath = fullPath; // (WaraMap check types)
-
-                        this.registerLink(map.id, fullPath, map, key);
                     }
                 } catch (e) {
-                    console.error(`[Catalog] Failed to load ${file}`, e);
+                    console.warn(`[Catalog] Failed to process ${file}`, e);
                 }
-            }
+            });
+
+            await Promise.all(tasks);
+
+        } catch (e) {
+            console.error(`[Catalog] Failed to scan directory ${dir}`, e);
         }
     }
 
