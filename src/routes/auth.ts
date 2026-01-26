@@ -1,10 +1,11 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
+import { getMediaMetadata, searchTMDB, getSeasonDetails } from '../utils/tmdb';
 import { ethers } from 'ethers';
-import { decryptPayload, verifyPassword, decryptPrivateKey, encryptPayload } from '../encryption';
+import { decryptPayload, verifyPassword, decryptPrivateKey, encryptPayload } from '../utils/encryption';
 import { randomUUID } from 'crypto';
 
-export const setupAuthRoutes = (node: WaraNode) => {
+export const setupAuthRoutes = (node: App) => {
     const router = Router();
     // POST /api/auth/register
     router.post('/register', async (req: Request, res: Response) => {
@@ -12,7 +13,7 @@ export const setupAuthRoutes = (node: WaraNode) => {
         if (!username || !password) return res.status(400).json({ error: 'Missing credentials' });
 
         try {
-            const { hashPassword, encryptPrivateKey } = await import('../encryption');
+            const { hashPassword, encryptPrivateKey } = await import('../utils/encryption');
             const existing = await node.prisma.localProfile.findUnique({ where: { username } });
             if (existing) return res.status(400).json({ error: 'Username taken' });
 
@@ -54,7 +55,7 @@ export const setupAuthRoutes = (node: WaraNode) => {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ error: 'Missing credentials' });
         try {
-            const { verifyPassword, decryptPrivateKey } = await import('../encryption');
+            const { verifyPassword, decryptPrivateKey } = await import('../utils/encryption');
 
             const profile = await node.prisma.localProfile.findUnique({ where: { username } }); // Public prisma
             if (!profile || !verifyPassword(password, profile.passwordHash)) {
@@ -63,13 +64,13 @@ export const setupAuthRoutes = (node: WaraNode) => {
 
             // Generate Session Token
             const authToken = randomUUID();
-            node.userSessions.set(authToken, profile.username); // Public userSessions
+            node.identity.userSessions.set(authToken, profile.username); // Public userSessions
 
             // Unlock Wallet for Session
             try {
                 const decryptedKey = decryptPrivateKey(profile.encryptedPrivateKey, password);
-                const sessionWallet = new ethers.Wallet(decryptedKey, node.provider);
-                node.activeWallets.set(authToken, sessionWallet); // Public activeWallets
+                const sessionWallet = new ethers.Wallet(decryptedKey, node.blockchain.provider);
+                node.identity.activeWallets.set(authToken, sessionWallet); // Public activeWallets
                 console.log(`[Auth] Wallet unlocked for session ${authToken.substring(0, 8)}...`);
             } catch (err) {
                 console.error("Failed to unlock wallet for session");
@@ -95,11 +96,11 @@ export const setupAuthRoutes = (node: WaraNode) => {
         }
 
         // 1. Verify Session
-        const username = node.userSessions.get(authToken);
+        const username = node.identity.userSessions.get(authToken);
         if (!username) return res.status(401).json({ error: 'Invalid session' });
 
         // 2. Get Unlocked Wallet
-        const wallet = node.activeWallets.get(authToken);
+        const wallet = node.identity.activeWallets.get(authToken);
         if (!wallet) return res.status(401).json({ error: 'Wallet locked. Re-login required.' });
 
         try {
@@ -126,6 +127,22 @@ export const setupAuthRoutes = (node: WaraNode) => {
             console.error("Ad Signing failed:", e);
             res.status(500).json({ error: 'Ad Signing failed: ' + e.message });
         }
+    });
+
+    // GET /api/auth/session
+    router.get('/session', node.identity.requireAuth, async (req: Request, res: Response) => {
+        // If we reach here, requireAuth middleware has already validated the session
+        // and attached user and wallet to req.
+        const username = (req as any).user.username;
+        const walletAddress = (req as any).user.walletAddress;
+        const authToken = req.headers['x-auth-token'] as string;
+
+        res.json({
+            success: true,
+            username,
+            walletAddress,
+            authToken
+        });
     });
 
     // POST /api/auth/import-profile (Encrypted with NodeKey)
@@ -185,12 +202,12 @@ export const setupAuthRoutes = (node: WaraNode) => {
             }
 
             const authToken = randomUUID();
-            node.userSessions.set(authToken, profile.username);
+            node.identity.userSessions.set(authToken, profile.username);
 
             try {
                 const decryptedKey = decryptPrivateKey(profile.encryptedPrivateKey, password);
-                const sessionWallet = new ethers.Wallet(decryptedKey, node.provider);
-                node.activeWallets.set(authToken, sessionWallet);
+                const sessionWallet = new ethers.Wallet(decryptedKey, node.blockchain.provider);
+                node.identity.activeWallets.set(authToken, sessionWallet);
                 console.log(`[Auth] Remote Wallet unlocked for user ${username}`);
             } catch (err) {
                 console.error("Failed to unlock remote wallet");
@@ -231,7 +248,7 @@ export const setupAuthRoutes = (node: WaraNode) => {
             // Let's Require Session Auth via Header 'x-auth-token'
 
             const authToken = req.headers['x-auth-token'] as string;
-            let username = node.userSessions.get(authToken);
+            let username = node.identity.userSessions.get(authToken);
 
             // If no session, try to infer from password? No.
             // Frontend MUST send Token.

@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
 
-export const setupRemoteRoutes = (node: WaraNode) => {
+export const setupRemoteRoutes = (node: App) => {
     const router = Router();
     // GET /api/remote-nodes
     router.get('/api/remote-nodes', async (req: Request, res: Response) => {
@@ -21,7 +21,7 @@ export const setupRemoteRoutes = (node: WaraNode) => {
         if (!userId || !url) return res.status(400).json({ error: 'Missing userId or url' });
 
         try {
-            const { encryptPayload } = await import('../encryption');
+            const { encryptPayload } = await import('../utils/encryption');
 
             const userExists = await node.prisma.localProfile.findUnique({ where: { id: String(userId) } });
             if (!userExists) return res.status(404).json({ error: 'User not found' });
@@ -67,7 +67,7 @@ export const setupRemoteRoutes = (node: WaraNode) => {
         if (!nodeId || !userId || !password) return res.status(400).json({ error: 'Missing parameters or password' });
 
         try {
-            const { decryptPayload } = await import('../encryption');
+            const { decryptPayload } = await import('../utils/encryption');
 
             const remoteNode = await node.prisma.remoteNode.findFirst({ where: { id: String(nodeId), userId: String(userId) } });
             if (!remoteNode) return res.status(404).json({ error: 'Node not found' });

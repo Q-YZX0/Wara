@@ -1,9 +1,9 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
 import { ethers } from 'ethers';
-import { WARA_ORACLE_ADDRESS, WARA_ORACLE_ABI } from '../contracts';
+import { CONFIG, ABIS } from '../config/config';
 
-export const setupOracleRoutes = (node: WaraNode) => {
+export const setupOracleRoutes = (node: App) => {
     const router = Router();
 
     /**
@@ -13,7 +13,7 @@ export const setupOracleRoutes = (node: WaraNode) => {
     router.post('/notify', async (req: Request, res: Response) => {
         const { cycleId, yourRank, judges, startTime, signature } = req.body;
 
-        if (!node.nodeSigner) {
+        if (!node.identity.nodeSigner) {
             return res.status(500).json({ error: 'Node identity not initialized' });
         }
 
@@ -26,13 +26,13 @@ export const setupOracleRoutes = (node: WaraNode) => {
 
             // 2. CRÍTICO: Verificar en blockchain que realmente soy juez
             const oracle = new ethers.Contract(
-                WARA_ORACLE_ADDRESS,
-                WARA_ORACLE_ABI,
-                node.provider
+                CONFIG.CONTRACTS.ORACLE,
+                ABIS.ORACLE,
+                node.blockchain.provider
             );
 
             const elected = await oracle.getElectedJudges();
-            const myAddress = node.nodeSigner.address.toLowerCase();
+            const myAddress = node.identity.nodeSigner.address.toLowerCase();
             const amIReallyJudge = elected.some((j: any) =>
                 j.nodeAddress && j.nodeAddress.toLowerCase() === myAddress
             );
@@ -43,8 +43,8 @@ export const setupOracleRoutes = (node: WaraNode) => {
             }
 
             // 3. Guardar asignación para actuar en el momento correcto
-            if (node.oracleService) {
-                await node.oracleService.setJudgeAssignment(cycleId, yourRank, judges, startTime);
+            if (node.oracle) {
+                await node.oracle.setJudgeAssignment(cycleId, yourRank, judges, startTime);
                 console.log(`[Oracle] ✓ Asignado como Juez #${yourRank} para ciclo ${cycleId}`);
             }
 
@@ -63,17 +63,17 @@ export const setupOracleRoutes = (node: WaraNode) => {
     router.post('/sign-price', async (req: Request, res: Response) => {
         const { cycleId, price, timestamp } = req.body;
 
-        if (!node.nodeSigner) {
+        if (!node.identity.nodeSigner) {
             return res.status(500).json({ error: 'Node identity not initialized' });
         }
 
-        if (!node.oracleService) {
+        if (!node.oracle) {
             return res.status(500).json({ error: 'Oracle service not initialized' });
         }
 
         try {
             // 1. Verificar que el precio es razonable (anti-manipulación)
-            const currentPrice = await node.oracleService.getMarketPrice();
+            const currentPrice = await node.oracle.getMarketPrice();
             const deviation = Math.abs(price - currentPrice) / currentPrice;
 
             if (deviation > 0.1) { // 10% max deviation
@@ -91,7 +91,7 @@ export const setupOracleRoutes = (node: WaraNode) => {
                 [priceInOracleFormat, timestamp, 11155111] // Sepolia chainId
             );
 
-            const signature = await node.nodeSigner.signMessage(
+            const signature = await node.identity.nodeSigner.signMessage(
                 ethers.getBytes(messageHash)
             );
 
@@ -99,8 +99,8 @@ export const setupOracleRoutes = (node: WaraNode) => {
 
             res.json({
                 signature,
-                nodeAddress: node.nodeSigner.address,
-                nodeName: node.nodeName || 'unknown'
+                nodeAddress: node.identity.nodeSigner.address,
+                nodeName: node.identity.nodeName || 'unknown'
             });
 
         } catch (e: any) {

@@ -1,13 +1,13 @@
 import { Router, Request, Response } from 'express';
 import { ethers } from 'ethers';
-import { WaraNode } from '../node';
-import { WARA_TOKEN_ADDRESS, ERC20_ABI } from '../contracts';
+import { App } from '../App';
+import { CONFIG, ABIS } from '../config/config';
 
-export const setupSubscriptionRoutes = (node: WaraNode) => {
+export const setupSubscriptionRoutes = (node: App) => {
     const router = Router();
 
     // Contract instance for READ operations (reuses node's instance)
-    const readContract = node.subContract;
+    const readContract = node.blockchain.subscriptions!;
 
     // GET /api/subscription/stats
     router.get('/stats', async (req: Request, res: Response) => {
@@ -72,8 +72,8 @@ export const setupSubscriptionRoutes = (node: WaraNode) => {
             const authToken = req.headers['x-wara-token'] as string;
 
             let userSigner: any = null;
-            if (authToken && node.activeWallets.has(authToken)) {
-                userSigner = node.activeWallets.get(authToken);
+            if (authToken && node.identity.activeWallets.has(authToken)) {
+                userSigner = node.identity.activeWallets.get(authToken);
             }
 
             if (!userSigner) {
@@ -81,34 +81,34 @@ export const setupSubscriptionRoutes = (node: WaraNode) => {
             }
 
             // Explicitly verify provider
-            if (!node.provider) {
+            if (!node.blockchain.provider) {
                 throw new Error("Node provider is not initialized");
             }
 
             // Connect signer to provider explicitly
-            const connectedSigner = userSigner.connect(node.provider);
+            const connectedSigner = userSigner.connect(node.blockchain.provider);
             console.log(`[Subscription] Processing for ${connectedSigner.address}`);
 
             // Instantiate Contracts
             // 1. Token Contract (Write access needed for approve)
-            const tokenContract = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, connectedSigner);
+            const tokenContract = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, ABIS.ERC20, connectedSigner);
 
             // 2. Subscription Contract (Write access needed for subscribe)
-            const subContract = node.subContract.connect(connectedSigner) as ethers.Contract;
+            const subContract = node.blockchain.subscriptions!.connect(connectedSigner) as ethers.Contract;
 
             // READ operation using the PROVIDER (safer for "call")
-            const readToken = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, node.provider);
+            const readToken = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, ABIS.ERC20, node.blockchain.provider);
 
             console.log(`[Subscription] Checking price...`);
             const price = await readContract.getCurrentPrice();
 
             console.log(`[Subscription] Checking allowance...`);
-            const allowance = await readToken.allowance(connectedSigner.address, await node.subContract.getAddress());
+            const allowance = await readToken.allowance(connectedSigner.address, await node.blockchain.subscriptions!.getAddress());
 
             if (allowance < price) {
                 console.log(`[Subscription] Approving WARA...`);
                 // WRITE operation using the SIGNER
-                const txApprove = await tokenContract.approve(await node.subContract.getAddress(), ethers.MaxUint256);
+                const txApprove = await tokenContract.approve(await node.blockchain.subscriptions!.getAddress(), ethers.MaxUint256);
                 await txApprove.wait();
                 console.log(`[Subscription] Approved: ${txApprove.hash}`);
             }

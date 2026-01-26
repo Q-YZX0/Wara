@@ -1,19 +1,19 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
 
-export const setupDaoRoutes = (node: WaraNode) => {
+export const setupDaoRoutes = (node: App) => {
     const router = Router();
     // GET /api/dao/proposals
     router.get('/proposals', async (req: Request, res: Response) => {
         try {
-            const nextId = await node.daoContract.nextProposalId();
+            const nextId = await node.blockchain.dao!.nextProposalId();
             const proposals = [];
 
             // Fetch last 10 proposals
             const start = Number(nextId) > 10 ? Number(nextId) - 10 : 0;
             for (let i = Number(nextId) - 1; i >= start; i--) {
                 if (i < 0) break;
-                const p = await node.daoContract.proposals(i);
+                const p = await node.blockchain.dao!.proposals(i);
                 proposals.push({
                     id: Number(p.id),
                     description: p.description,
@@ -39,11 +39,11 @@ export const setupDaoRoutes = (node: WaraNode) => {
     router.post('/proposals', async (req: Request, res: Response) => {
         const { description, recipient, amount, pType } = req.body;
         try {
-            const userSigner = node.getAuthenticatedSigner(req);
+            const userSigner = node.identity.getAuthenticatedSigner(req);
             if (!userSigner) return res.status(401).json({ error: 'Unauthorized' });
 
-            const connectedSigner = userSigner.connect(node.provider);
-            const contractWithUser = node.daoContract.connect(connectedSigner) as any;
+            const connectedSigner = userSigner.connect(node.blockchain.provider);
+            const contractWithUser = node.blockchain.dao!.connect(connectedSigner) as any;
 
             const tx = await contractWithUser.createProposal(description, recipient, amount, pType);
             await tx.wait();
@@ -59,11 +59,11 @@ export const setupDaoRoutes = (node: WaraNode) => {
     router.post('/vote', async (req: Request, res: Response) => {
         const { proposalId, side } = req.body;
         try {
-            const userSigner = node.getAuthenticatedSigner(req);
+            const userSigner = node.identity.getAuthenticatedSigner(req);
             if (!userSigner) return res.status(401).json({ error: 'Unauthorized' });
 
-            const connectedSigner = userSigner.connect(node.provider);
-            const contractWithUser = node.daoContract.connect(connectedSigner) as any;
+            const connectedSigner = userSigner.connect(node.blockchain.provider);
+            const contractWithUser = node.blockchain.dao!.connect(connectedSigner) as any;
 
             const tx = await contractWithUser.vote(proposalId, side);
             await tx.wait();

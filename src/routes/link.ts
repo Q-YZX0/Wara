@@ -1,12 +1,12 @@
 import { Router, Request, Response } from 'express';
 import { ethers } from 'ethers';
-import { WaraNode } from '../node';
-import { getMediaMetadata } from '../tmdb';
-import path from 'path';
-import fs from 'fs';
-import { LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI } from '../contracts';
+import { App } from '../App';
+import { getMediaMetadata } from '../utils/tmdb';
+import * as path from 'path';
+import * as fs from 'fs';
+import { CONFIG, ABIS } from '../config/config';
 
-export const setupLinkRoutes = (node: WaraNode) => {
+export const setupLinkRoutes = (node: App) => {
     const router = Router();
     // Get filtered links
     router.get('/', async (req: Request, res: Response) => {
@@ -41,33 +41,31 @@ export const setupLinkRoutes = (node: WaraNode) => {
                     if (isIpAddress) {
                         // 1. IP Authority
                         // NAT Loopback Fix: If it's my own public IP and I am requesting locally, switch to localhost
-                        if (hostname === node.publicIp && isLocalRequest) {
-                            resolvedUrl = `http://localhost:${node.port}/stream/${link.id}`;
+                        if (hostname === node.identity.publicIp && isLocalRequest) {
+                            resolvedUrl = `http://localhost:${CONFIG.PORT}/stream/${link.id}`;
                         } else {
                             // Standard IP Construction
-                            resolvedUrl = `http://${hostname}:${node.port}/stream/${link.id}`;
+                            resolvedUrl = `http://${hostname}:${CONFIG.PORT}/stream/${link.id}`;
                         }
                     } else {
                         // 2. Named Authority (muggi.wara, 0x123...)
                         const identifier = hostname;
-                        const nodeAny = node as any;
 
                         // Check if it IS my own identity
-                        const isLocalByName = identifier.includes('.wara') && nodeAny.nodeName && identifier === nodeAny.nodeName;
-                        const isLocalByAddress = identifier.startsWith('0x') && nodeAny.nodeAddress && nodeAny.nodeAddress.toLowerCase() === identifier.toLowerCase();
+                        const isLocalByName = identifier.includes('.wara') && node.identity.nodeName && identifier === node.identity.nodeName;
 
-                        if (isLocalByName || isLocalByAddress) {
+                        if (isLocalByName) {
                             // Local link -> use localhost OR Public IP depending on requester
-                            const targetBase = isLocalRequest ? `localhost:${node.port}` : `${node.publicIp}:${node.port}`;
+                            const targetBase = isLocalRequest ? `localhost:${CONFIG.PORT}` : `${node.identity.publicIp}:${CONFIG.PORT}`;
                             resolvedUrl = `http://${targetBase}/stream/${link.id}`;
                         } else {
                             // Remote Named Link -> Resolve via Peer Table
                             let resolvedEndpoint = null;
 
                             // Iterate known peers to find the IP associated with this Authority Name
-                            for (const [peerName, peer] of node.knownPeers.entries()) {
+                            for (const [peerName, peer] of node.p2p.knownPeers.entries()) {
                                 const matchByName = identifier.includes('.wara') && peerName === identifier;
-                                const matchByAddress = identifier.startsWith('0x') && peer.nodeAddress && peer.nodeAddress.toLowerCase() === identifier.toLowerCase();
+                                const matchByAddress = identifier.startsWith('0x') && peer.walletAddress && peer.walletAddress.toLowerCase() === identifier.toLowerCase();
 
                                 if (matchByName || matchByAddress) {
                                     resolvedEndpoint = peer.endpoint;
@@ -106,7 +104,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
 
         // 0. Strict Identity Check (Must be an active USER session)
         const authToken = (req.headers['x-auth-token'] || req.body.authToken) as string;
-        const signer = node.activeWallets.get(authToken);
+        const signer = node.identity.activeWallets.get(authToken);
         if (!signer) return res.status(401).json({ error: "Unauthorized: Active USER session required" });
 
         let media: any = null;
@@ -120,9 +118,9 @@ export const setupLinkRoutes = (node: WaraNode) => {
 
             // 1.1 Ownership Check for Blessing decision
             let isContractOwner = false;
-            if (node.mediaRegistry) {
+            if (node.blockchain.mediaRegistry) {
                 try {
-                    const ownerAddress = await node.mediaRegistry.owner();
+                    const ownerAddress = await node.blockchain.mediaRegistry.owner();
                     isContractOwner = (signer.address.toLowerCase() === ownerAddress.toLowerCase());
                 } catch (e) {
                     console.warn("[Link] Could not verify contract ownership.");
@@ -142,8 +140,8 @@ export const setupLinkRoutes = (node: WaraNode) => {
             const linkId = url.split('/').pop()?.split('#')[0]; // Extract linkId from wara://.../linkId#key
             if (!linkId) return res.status(400).json({ error: 'Invalid URL format: Could not extract linkId' });
 
-            const tempBase = path.join(node.dataDir, 'temp');
-            const permBase = path.join(node.dataDir, 'permanent');
+            const tempBase = path.join(CONFIG.DATA_DIR, 'temp');
+            const permBase = path.join(CONFIG.DATA_DIR, 'permanent');
             const tempWara = path.join(tempBase, `${linkId}.wara`);
             const permWara = path.join(permBase, `${linkId}.wara`);
 
@@ -175,7 +173,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
                 }
             } else {
                 // Check legacy root for backward compatibility
-                const legacyWara = path.join(node.dataDir, `${linkId}.wara`);
+                const legacyWara = path.join(CONFIG.DATA_DIR, `${linkId}.wara`);
                 if (fs.existsSync(legacyWara)) {
                     finalPath = legacyWara;
                 } else {
@@ -184,10 +182,10 @@ export const setupLinkRoutes = (node: WaraNode) => {
             }
 
             // 2. Sovereign Media Registration (Universal Proposal Flow)
-            if (node.mediaRegistry) {
+            if (node.blockchain.mediaRegistry) {
                 let onChain = false;
                 try {
-                    const [exists] = await node.mediaRegistry.exists(String(source), String(sourceId));
+                    const [exists] = await node.blockchain.mediaRegistry.exists(String(source), String(sourceId));
                     onChain = exists;
                 } catch (e: any) {
                     console.warn(`[Web3] Registry check failed: ${e.message}`);
@@ -197,7 +195,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
                 if (!onChain) {
                     try {
                         console.log(`[Web3] Registering Media Identity on-chain for ${sourceId}...`);
-                        const registryWrite = node.mediaRegistry.connect(signer);
+                        const registryWrite = node.blockchain.mediaRegistry.connect(signer);
 
                         // Registering as a standard user creates a "Proposed" entry
                         // The smart contract logic handles the 'isOwner' check internally for status assignment
@@ -269,10 +267,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
                     }
                 }
 
-                const activeSigner = signer.provider ? signer : signer.connect(node.provider);
-                const linkRegistry = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, activeSigner);
-
-                const tx = await linkRegistry.registerLink(contentHash, media.waraId, salt, finalUploaderWallet);
+                const tx = await (node.blockchain.linkRegistry! as any).registerLink(contentHash, media.waraId, salt, finalUploaderWallet);
                 txHash = tx.hash;
             } catch (err: any) {
                 console.error("[Web3] Auto-Registration Failed:", err.message);
@@ -292,7 +287,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
                 const mapPath = finalPath.replace('.wara', '.json');
                 if (fs.existsSync(mapPath)) {
                     const mapData = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
-                    node.registerLink(linkId, finalPath, mapData, mapData.key);
+                    node.catalog.registerLink(linkId, finalPath, mapData, mapData.key);
                 }
             } catch (e) {
                 console.warn(`[Link] Catalog activation failed for ${linkId}`);
@@ -308,7 +303,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
     router.post('/register-on-chain', async (req: Request, res: Response) => {
         const { linkId, sourceId, source = 'tmdb', contentHash, salt, uploaderWallet } = req.body;
 
-        const signer = node.getAuthenticatedSigner(req);
+        const signer = node.identity.getAuthenticatedSigner(req);
         if (!signer) return res.status(401).json({ error: 'Authentication required to sign transactions.' });
 
         try {
@@ -357,12 +352,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
 
             async function performRegistration(mHash: string, cHash: string, s: string, hoster: string) {
                 if (!signer) return res.status(401).json({ error: 'Signer disappeared' });
-                const activeSigner = signer.provider ? signer : signer.connect(node.provider);
-                const linkRegistry = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, activeSigner);
-
-                console.log(`[Web3] Sending registerLink TX. Hoster: ${hoster}, MediaHash: ${mHash}`);
-                // registerLink(contentHash, mediaHash, salt, hoster)
-                const tx = await linkRegistry.registerLink(cHash, mHash, s, hoster);
+                const tx = await (node.blockchain.linkRegistry!.connect(signer) as any).registerLink(cHash, mHash, s, hoster);
 
                 return res.json({ success: true, txHash: tx.hash });
             }
@@ -404,7 +394,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
         try {
 
             // 1. Get authenticated signer from session (using authToken)
-            const userSigner = node.getAuthenticatedSigner(req);
+            const userSigner = node.identity.getAuthenticatedSigner(req);
             if (!userSigner) return res.status(401).json({ error: 'Authentication required. Please login.' });
 
             // Get voter address from authenticated signer (don't trust frontend)
@@ -437,7 +427,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
                 const relayer = hosterAddress;
                 const messageHash = ethers.solidityPackedKeccak256(
                     ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
-                    [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, (await node.provider.getNetwork()).chainId, LINK_REGISTRY_ADDRESS]
+                    [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, Number((await node.blockchain.provider.getNetwork()).chainId), CONFIG.CONTRACTS.LINK_REGISTRY]
                 );
                 const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
@@ -449,7 +439,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
                         const hostname = url.hostname;
                         const isIpAddress = /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname === 'localhost';
                         if (!isIpAddress) {
-                            const peer = node.knownPeers.get(hostname);
+                            const peer = node.p2p.knownPeers.get(hostname);
                             if (peer) targetUrl = peer.endpoint;
                         }
                     } catch (e) { }
@@ -466,20 +456,22 @@ export const setupLinkRoutes = (node: WaraNode) => {
 
             } else {
                 // DOWNVOTE: Sign for multiple peers to "repartir los votos" (Rewards for whoever submits)
-                const peers = Array.from(node.knownPeers.values()).filter(p => p.walletAddress);
+                const peers = Array.from(node.p2p.knownPeers.values()).filter(p => p.walletAddress);
                 const targets = peers.sort(() => 0.5 - Math.random()).slice(0, 5); // Random 5 peers
 
                 if (targets.length === 0) {
                     // Fallback: Sign for our own node and submit locally
-                    const relayer = node.nodeSigner?.address || ethers.ZeroAddress;
+                    const relayer = node.identity.nodeSigner?.address || ethers.ZeroAddress;
                     const messageHash = ethers.solidityPackedKeccak256(
                         ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
-                        [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, (await node.provider.getNetwork()).chainId, LINK_REGISTRY_ADDRESS]
+                        [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, Number((await node.blockchain.provider.getNetwork()).chainId), CONFIG.CONTRACTS.LINK_REGISTRY]
                     );
                     const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
                     console.log(`[Vote] No peers found for downvote. Relaying to self...`);
-                    await fetch(`http://localhost:${node.port}/links/vote/submit`, {
+                    // @ts-ignore
+                    const fetch = (await import('node-fetch')).default as any;
+                    await fetch(`http://localhost:${CONFIG.PORT}/links/vote/submit`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ linkId, contentHash, voteValue, voter, relayer, signature, nonce, timestamp })
@@ -492,7 +484,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
                         const relayer = peer.walletAddress;
                         const messageHash = ethers.solidityPackedKeccak256(
                             ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
-                            [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, (await node.provider.getNetwork()).chainId, LINK_REGISTRY_ADDRESS]
+                            [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, Number((await node.blockchain.provider.getNetwork()).chainId), CONFIG.CONTRACTS.LINK_REGISTRY]
                         );
                         const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
@@ -536,7 +528,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
 
             const messageHash = ethers.solidityPackedKeccak256(
                 ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
-                [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, (await node.provider.getNetwork()).chainId, LINK_REGISTRY_ADDRESS]
+                [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, Number((await node.blockchain.provider.getNetwork()).chainId), CONFIG.CONTRACTS.LINK_REGISTRY]
             );
             const recoveredAddress = ethers.verifyMessage(ethers.getBytes(messageHash), signature);
 
@@ -563,9 +555,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
             });
 
             // Save Signed Vote to Disk for Batch Claiming
-            const fs = await import('fs');
-            const path = await import('path');
-            const votesDir = path.join(node.dataDir, 'votes');
+            const votesDir = path.join(CONFIG.DATA_DIR, 'votes');
             if (!fs.existsSync(votesDir)) fs.mkdirSync(votesDir, { recursive: true });
 
             // Filename: timestamp_voter_link.json
@@ -593,7 +583,7 @@ export const setupLinkRoutes = (node: WaraNode) => {
                 // Avoid infinite loops by probability or checking if we already had it (we check DB existence above)
                 // Since checkDB stopped duplicates, we are safe to re-gossip if it's new to US.
 
-                const peers = Array.from(node.knownPeers.values());
+                const peers = Array.from(node.p2p.knownPeers.values());
                 if (peers.length > 0) {
                     // Pick 3 random peers
                     const targets = peers.sort(() => 0.5 - Math.random()).slice(0, 3);
@@ -601,12 +591,14 @@ export const setupLinkRoutes = (node: WaraNode) => {
                     console.log(`[Vote] Gossiping downvote to ${targets.length} peers...`);
 
                     // Fire and forget - don't await
+                    // @ts-ignore
+                    const fetch = (await import('node-fetch')).default as any;
                     Promise.allSettled(targets.map(peer =>
-                        fetch(`${peer.url}/links/vote/submit`, {
+                        fetch(`${peer.endpoint}/links/vote/submit`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(req.body) // Forward original payload
-                        }).catch(err => console.error(`Gossip failed to ${peer.url}`, err.message))
+                        }).catch((err: any) => console.error(`Gossip failed to ${peer.endpoint}`, err.message))
                     ));
                 }
             }
@@ -623,14 +615,14 @@ export const setupLinkRoutes = (node: WaraNode) => {
     router.get('/vote/received', async (req: Request, res: Response) => {
         try {
             const { wallet } = req.query;
-            const signer = node.getAuthenticatedSigner(req);
+            const signer = node.identity.getAuthenticatedSigner(req);
             const targetWallet = (wallet as string || signer?.address || "").toLowerCase();
 
             if (!targetWallet) return res.status(400).json({ error: 'Missing wallet or session' });
 
             const fs = await import('fs');
             const path = await import('path');
-            const votesDir = path.join(node.dataDir, 'votes');
+            const votesDir = path.join(CONFIG.DATA_DIR, 'votes');
             const results: any[] = [];
 
             // 1. Try DB first (Fastest/Rich Data)
@@ -683,14 +675,14 @@ export const setupLinkRoutes = (node: WaraNode) => {
     router.get('/vote/pending', async (req: Request, res: Response) => {
         try {
             const { wallet } = req.query;
-            const signer = node.getAuthenticatedSigner(req);
+            const signer = node.identity.getAuthenticatedSigner(req);
             const targetWallet = (wallet as string || signer?.address || "").toLowerCase();
 
             if (!targetWallet) return res.status(400).json({ error: 'Missing wallet or session' });
 
             const fs = await import('fs');
             const path = await import('path');
-            const votesDir = path.join(node.dataDir, 'votes');
+            const votesDir = path.join(CONFIG.DATA_DIR, 'votes');
             const searchVal = targetWallet;
 
             if (!fs.existsSync(votesDir)) return res.json({ votes: [] });

@@ -1,13 +1,16 @@
 import { Router, Request, Response } from 'express';
+import { App } from '../App';
+import { CONFIG } from '../config/config';
+import { getMediaMetadata } from '../utils/tmdb';
+import * as path from 'path';
+import * as fs from 'fs';
 import { ethers } from 'ethers';
-import { WaraNode } from '../node';
-import { getMediaMetadata } from '../tmdb';
 
-export const setupMediaRoutes = (node: WaraNode) => {
+export const setupMediaRoutes = (node: App) => {
     const router = Router();
 
     // Contrato en modo lectura (Singleton del nodo)
-    const registry = node.mediaRegistry;
+    const registry = node.blockchain.mediaRegistry!;
 
     // --- P2P Media Manifest Serving ---
     // GET /api/media/stream/:waraId
@@ -36,7 +39,7 @@ export const setupMediaRoutes = (node: WaraNode) => {
 
             // 0. Strict Identity Check (Must be an active USER session)
             const authToken = (req.headers['x-auth-token'] || req.body.authToken) as string;
-            const signer = node.activeWallets.get(authToken);
+            const signer = node.identity.activeWallets.get(authToken);
             if (!signer) return res.status(401).json({ error: "Unauthorized: Active USER session required" });
 
             // 0.1 Check Ownership Soberana (On-Chain Owner)
@@ -94,7 +97,7 @@ export const setupMediaRoutes = (node: WaraNode) => {
                 return res.json({ success: true, status: 'approved', txHash: tx.hash, media });
             } else {
                 // User Flow: Proposal (Local DB + Manifest only)
-                const signer = node.getAuthenticatedSigner(req);
+                const signer = node.identity.getAuthenticatedSigner(req);
                 if (!signer) return res.status(401).json({ error: "Unauthorized: Active session required for proposals" });
 
                 if (media.status === 'approved') {
@@ -178,7 +181,7 @@ export const setupMediaRoutes = (node: WaraNode) => {
 
     // GET /api/media/proposals
     // Obtiene las propuestas de contenido
-    router.get('/proposals', node.requireAuth, async (req: Request, res: Response) => {
+    router.get('/proposals', node.identity.requireAuth, async (req: Request, res: Response) => {
         try {
             const status = req.query.status as string || 'pending_dao';
             const proposals = await node.prisma.media.findMany({
@@ -270,8 +273,7 @@ export const setupMediaRoutes = (node: WaraNode) => {
 
     // POST /api/media/review
     // Aprueba o rechaza una propuesta. Si rechaza, borra el manifiesto.
-    // Creo que esta funcion no tiene sentido podria ser igual a status
-    router.post('/review', node.requireAuth, async (req: Request, res: Response) => {
+    router.post('/review', node.identity.requireAuth, async (req: Request, res: Response) => {
         const { waraId, status } = req.body;
         if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: "Invalid status" });
 
@@ -285,7 +287,7 @@ export const setupMediaRoutes = (node: WaraNode) => {
             });
 
             if (status === 'rejected') {
-                const manifestPath = path.join(node.dataDir, 'media', `${waraId}.json`);
+                const manifestPath = path.join(CONFIG.DATA_DIR, 'media', `${waraId}.json`);
                 if (fs.existsSync(manifestPath)) {
                     fs.unlinkSync(manifestPath);
                     console.log(`[Media] Burned Sovereign Manifest for rejected media: ${waraId}`);
@@ -307,14 +309,14 @@ export const setupMediaRoutes = (node: WaraNode) => {
             const authToken = req.headers['x-auth-token'] as string;
             if (!authToken) return res.status(401).json({ error: "Auth required" });
 
-            const wallet = node.activeWallets.get(authToken);
+            const wallet = node.identity.activeWallets.get(authToken);
             if (!wallet) return res.status(401).json({ error: "Session invalid" });
 
-            const userSigner = wallet.connect(node.provider);
-            const registry = node.mediaRegistry.connect(userSigner) as ethers.Contract;
+            const userSigner = wallet.connect(node.blockchain.provider);
+            const registryWrite = node.blockchain.mediaRegistry!.connect(userSigner) as ethers.Contract;
 
             console.log(`[Governance] Voting ${side} on ${source}:${sourceId} by ${userSigner.address}...`);
-            const tx = await registry.vote(source, sourceId, side);
+            const tx = await registryWrite.vote(source, sourceId, side);
             await tx.wait();
 
             res.json({ success: true, txHash: tx.hash, message: "Vote cast on-chain" });
@@ -331,14 +333,14 @@ export const setupMediaRoutes = (node: WaraNode) => {
             const authToken = req.headers['x-auth-token'] as string;
             if (!authToken) return res.status(401).json({ error: "Auth required" });
 
-            const wallet = node.activeWallets.get(authToken);
+            const wallet = node.identity.activeWallets.get(authToken);
             if (!wallet) return res.status(401).json({ error: "Session invalid" });
 
-            const userSigner = wallet.connect(node.provider);
-            const registry = node.mediaRegistry.connect(userSigner) as ethers.Contract;
+            const userSigner = wallet.connect(node.blockchain.provider);
+            const registryWrite = node.blockchain.mediaRegistry!.connect(userSigner) as ethers.Contract;
 
             console.log(`[Governance] Resolving ${source}:${sourceId} by ${userSigner.address}...`);
-            const tx = await registry.resolveProposal(source, sourceId, title, "meta_hash_placeholder");
+            const tx = await registryWrite.resolveProposal(source, sourceId, title, "meta_hash_placeholder");
             await tx.wait();
 
             res.json({ success: true, txHash: tx.hash, message: "Proposal Resolved" });

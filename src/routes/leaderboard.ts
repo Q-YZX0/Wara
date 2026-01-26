@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
 
-export const setupLeaderboardRoutes = (node: WaraNode) => {
+export const setupLeaderboardRoutes = (node: App) => {
     const router = Router();
     // GET /api/leaderboard/content - Top Ranked Links
     router.get('/content', async (req, res) => {

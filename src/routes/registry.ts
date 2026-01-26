@@ -1,10 +1,11 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
+import * as path from 'path';
+import * as fs from 'fs';
+import { CONFIG } from '../config/config';
 import { ethers } from 'ethers';
-import path from 'path';
-import fs from 'fs';
 
-export const setupRegistryRoutes = (node: WaraNode) => {
+export const setupRegistryRoutes = (node: App) => {
     const router = Router();
     // --- Blockchain Identity Endpoints (Muggi Registry) ---
 
@@ -18,13 +19,13 @@ export const setupRegistryRoutes = (node: WaraNode) => {
         try {
             // 1. Authorization: Valid Session Token ONLY
             // The User IS the Owner. Simple.
-            const userSigner = node.activeWallets.get(authToken);
+            const userSigner = node.identity.activeWallets.get(authToken);
 
             if (!userSigner) {
                 return res.status(401).json({ error: 'No active session. Please login.' });
             }
 
-            if (!node.nodeSigner) {
+            if (!node.identity.nodeSigner) {
                 return res.status(500).json({ error: 'Node Technical Identity not initialized' });
             }
 
@@ -35,15 +36,15 @@ export const setupRegistryRoutes = (node: WaraNode) => {
             console.log(`[Web3] Registering ${finalName} for User: ${userSigner.address}`);
 
             // 3. Connect Signer
-            const connectedSigner = userSigner.connect(node.provider);
-            const contractWithUser = node.registryContract.connect(connectedSigner) as any;
+            const connectedSigner = userSigner.connect(node.blockchain.provider);
+            const contractWithUser = node.blockchain.nodeRegistry!.connect(connectedSigner) as any;
 
             // 4. Calculate Fee
-            const techAddress = node.nodeSigner.address;
+            const techAddress = node.identity.nodeSigner.address;
             const baseFee = await contractWithUser.registrationFee();
 
             // Simplified Fee Logic (Sentinel Budget)
-            const feeData = await node.provider.getFeeData();
+            const feeData = await node.blockchain.provider.getFeeData();
             const gasPrice = feeData.gasPrice || BigInt(1000000000);
             const sentinelBudget = BigInt(50000 * 365) * gasPrice;
 
@@ -67,13 +68,13 @@ export const setupRegistryRoutes = (node: WaraNode) => {
             console.log(`[Web3] TX confirmed in block ${receipt.blockNumber}`);
 
             // 6. Update Local Identity
-            const idPath = path.join(node.dataDir, 'node_identity.json');
+            const idPath = path.join(CONFIG.DATA_DIR, 'node_identity.json');
             // Read or create default structure
             let identity: any = {};
             if (fs.existsSync(idPath)) {
                 identity = JSON.parse(fs.readFileSync(idPath, 'utf-8'));
             } else {
-                identity = { nodeKey: node.nodeSigner.privateKey };
+                identity = { nodeKey: node.identity.nodeSigner.privateKey };
             }
 
             identity.name = finalName;
@@ -84,19 +85,19 @@ export const setupRegistryRoutes = (node: WaraNode) => {
             fs.writeFileSync(idPath, JSON.stringify(identity, null, 2));
 
             // 7. Activate Identity in memory
-            node.nodeName = identity.name;
-            node.nodeOwner = identity.owner;
-            node.startSentinelCron();
+            node.identity.nodeName = identity.name;
+            node.identity.nodeOwner = identity.owner;
+            node.identity.startSentinelCron();
 
             res.json({
                 success: true,
-                name: node.nodeName,
+                name: node.identity.nodeName,
                 address: techAddress,
                 owner: userSigner.address,
                 txHash: tx.hash
             });
 
-            console.log(`[Web3] Identity ACTIVATED: ${node.nodeName}`);
+            console.log(`[Web3] Identity ACTIVATED: ${node.identity.nodeName}`);
 
         } catch (e: any) {
             console.error("[Web3] Registration failed:", e);
@@ -107,8 +108,8 @@ export const setupRegistryRoutes = (node: WaraNode) => {
     // Get registration fee
     router.get('/registration-fee', async (req: Request, res: Response) => {
         try {
-            const baseFee = await node.registryContract.registrationFee();
-            const feeData = await node.provider.getFeeData();
+            const baseFee = await node.blockchain.nodeRegistry!.registrationFee();
+            const feeData = await node.blockchain.provider.getFeeData();
 
             // Prefer maxFeePerGas (EIP-1559) or gasPrice, fallback to 2 Gwei
             const gasPrice = feeData.maxFeePerGas || feeData.gasPrice || BigInt(2000000000);
@@ -138,7 +139,7 @@ export const setupRegistryRoutes = (node: WaraNode) => {
     router.get('/name-exists/:name', async (req: Request, res: Response) => {
         try {
             const name = req.params.name.replace('.wara', '');
-            const exists = await node.registryContract.nameExists(name);
+            const exists = await node.blockchain.nodeRegistry!.nameExists(name);
             res.json({ exists });
         } catch (e) {
             console.error("[Web3 Error]", e);
@@ -150,13 +151,13 @@ export const setupRegistryRoutes = (node: WaraNode) => {
     router.get('/node-info/:name', async (req: Request, res: Response) => {
         try {
             const name = req.params.name.replace('.wara', '');
-            const info = await node.registryContract.getNode(name);
+            const info = await node.blockchain.nodeRegistry!.getNode(name);
             // info: [operator, nodeAddress, expiresAt, active]
             res.json({
-                operator: info[0],
-                nodeAddress: info[1],
-                expiresAt: Number(info[2]),
-                active: info[3]
+                operator: info[0] || info.operator,
+                nodeAddress: info[1] || info.nodeAddress,
+                expiresAt: Number(info[2] || info.expiresAt),
+                active: info[3] || info.active
             });
         } catch (e) {
             console.error("[Web3 Error]", e);

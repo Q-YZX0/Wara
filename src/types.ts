@@ -53,3 +53,13 @@ export interface WaraLinkConfig {
     port: number;
     host: string;
 }
+
+export interface WaraPeer {
+    name: string;
+    endpoint: string; // http://ip:port
+    lastSeen: number;
+    signature?: string;
+    walletAddress?: string;
+    isTrusted?: boolean;
+    localEndpoint?: string; // LAN optimization
+}

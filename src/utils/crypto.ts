@@ -8,7 +8,7 @@ const pipe = promisify(pipeline);
 
 const ALGORITHM = 'aes-256-ctr';
 
-export async function createEncryptedWaraStream(
+export async function createEncryptedStream(
     inputPath: string,
     outputPath: string,
     key: Buffer

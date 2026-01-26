@@ -1,12 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
 import { ethers } from 'ethers';
 
 
-export const setupAdsRoutes = (node: WaraNode) => {
+export const setupAdsRoutes = (node: App) => {
     const router = Router();
-    const contract = node.adManager;
-    const tokenContract = node.tokenContract;
+    const contract = node.blockchain.adManager!;
+    const tokenContract = node.blockchain.token!;
     // GET /api/ads/my-campaigns?wallet=0x...
     router.get('/my-campaigns', async (req: Request, res: Response) => {
         const wallet = req.query.wallet as string;
@@ -56,7 +56,7 @@ export const setupAdsRoutes = (node: WaraNode) => {
         if (!wallet || !budget || !videoHash) return res.status(400).json({ error: "Missing params" });
 
         try {
-            const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
+            const userSigner = await node.identity.getLocalUserWallet(wallet); // Using node instance
 
             const token = tokenContract.connect(userSigner) as ethers.Contract;
             const manager = contract.connect(userSigner) as ethers.Contract;
@@ -84,7 +84,7 @@ export const setupAdsRoutes = (node: WaraNode) => {
     router.post('/cancel', async (req: Request, res: Response) => {
         const { wallet, id } = req.body;
         try {
-            const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
+            const userSigner = await node.identity.getLocalUserWallet(wallet); // Using node instance
             const manager = contract.connect(userSigner) as ethers.Contract;
 
             const tx = await manager.cancelCampaign(id);
@@ -99,7 +99,7 @@ export const setupAdsRoutes = (node: WaraNode) => {
     router.post('/toggle-pause', async (req: Request, res: Response) => {
         const { wallet, id } = req.body;
         try {
-            const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
+            const userSigner = await node.identity.getLocalUserWallet(wallet); // Using node instance
             const manager = contract.connect(userSigner) as ethers.Contract;
 
             const tx = await manager.togglePause(id);
@@ -114,7 +114,7 @@ export const setupAdsRoutes = (node: WaraNode) => {
     router.post('/report', async (req: Request, res: Response) => {
         const { wallet, id, reason } = req.body;
         try {
-            const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
+            const userSigner = await node.identity.getLocalUserWallet(wallet); // Using node instance
             const manager = contract.connect(userSigner) as ethers.Contract;
 
             console.log(`[Ads] Reporting Ad #${id} by ${wallet}, Reason: ${reason}`);
@@ -132,7 +132,7 @@ export const setupAdsRoutes = (node: WaraNode) => {
     router.post('/topup', async (req: Request, res: Response) => {
         const { wallet, id, amount } = req.body;
         try {
-            const userSigner = await node.getLocalUserWallet(wallet); // Using node instance
+            const userSigner = await node.identity.getLocalUserWallet(wallet); // Using node instance
 
             const token = tokenContract.connect(userSigner) as ethers.Contract;
             const manager = contract.connect(userSigner) as ethers.Contract;

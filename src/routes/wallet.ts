@@ -1,18 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
 import { ethers } from 'ethers';
-import { decryptPayload } from '../encryption';
-import fs from 'fs';
-import path from 'path';
+import { decryptPayload } from '../utils/encryption';
+import * as fs from 'fs';
+import * as path from 'path';
+import { CONFIG, ABIS } from '../config/config';
 
-import { AD_MANAGER_ADDRESS, AD_MANAGER_ABI } from '../contracts';
-import { LINK_REGISTRY_ADDRESS } from '../contracts';
-import { ERC20_ABI, WARA_TOKEN_ADDRESS } from '../contracts';
-import { SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI } from '../contracts';
-const fetch = require('node-fetch');
-// Utility
-
-export const setupWalletRoutes = (node: WaraNode) => {
+export const setupWalletRoutes = (node: App) => {
     const router = Router();
     // ==========================================
     // WALLET & BLOCKCHAIN API  
@@ -33,19 +27,19 @@ export const setupWalletRoutes = (node: WaraNode) => {
                 normalizedAddress = (address as string).toLowerCase();
             }
 
-            const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+            const provider = node.blockchain.provider;
 
             // ETH Balance
             const ethBal = await provider.getBalance(normalizedAddress);
 
             // WARA Balance
-            const tokenContract = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, provider);
+            const tokenContract = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, ABIS.ERC20, provider);
             const waraBal = await tokenContract.balanceOf(normalizedAddress);
 
             res.json({
                 eth: ethers.formatEther(ethBal),
                 wara: ethers.formatUnits(waraBal, 18),
-                waraAddress: WARA_TOKEN_ADDRESS
+                waraAddress: CONFIG.CONTRACTS.TOKEN
             });
         } catch (e: any) {
             console.error("Balance fetch failed", e);
@@ -69,26 +63,24 @@ export const setupWalletRoutes = (node: WaraNode) => {
             }
 
 
-            const rpcUrl = process.env.RPC_URL;
-            const provider = new ethers.JsonRpcProvider(rpcUrl);
+            const rpcUrl = CONFIG.RPC_URL;
+            const provider = node.blockchain.provider;
 
             let ethBal = BigInt(0);
             let waraBal = BigInt(0);
 
             try {
-                // Timeout-like check (getBalance is async)
                 ethBal = await provider.getBalance(profile.walletAddress);
-
-                const tokenContract = new ethers.Contract(WARA_TOKEN_ADDRESS, ERC20_ABI, provider);
+                const tokenContract = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, ABIS.ERC20, provider);
                 waraBal = await tokenContract.balanceOf(profile.walletAddress);
             } catch (rpcError) {
-                console.warn(`[WaraNode] Blockchain RPC Unreachable at ${rpcUrl}. Returning 0 balances.`);
+                console.warn(`[App] Blockchain RPC Unreachable at ${rpcUrl}. Returning 0 balances.`);
             }
 
             res.json({
                 eth: ethers.formatEther(ethBal),
                 wara: ethers.formatUnits(waraBal, 18),
-                waraAddress: WARA_TOKEN_ADDRESS,
+                waraAddress: CONFIG.CONTRACTS.TOKEN,
                 address: profile.walletAddress
             });
         } catch (e: any) {
@@ -107,8 +99,9 @@ export const setupWalletRoutes = (node: WaraNode) => {
 
             // 1. Get User's Wallet (Requires decryping PK with password)
             // If the user is logged in, they provide their password for this sensitive action.
-            const wallet = await node.getLocalUserWallet(from, password);
-            const signer = wallet.connect(new ethers.JsonRpcProvider(process.env.RPC_URL));
+            const wallet = await node.identity.getLocalUserWallet(from, password);
+            if (!wallet) return res.status(401).json({ error: 'Auth failed: check password' });
+            const signer = wallet.connect(node.blockchain.provider);
 
             let tx;
             if (type === 'eth') {
@@ -117,7 +110,7 @@ export const setupWalletRoutes = (node: WaraNode) => {
                     value: ethers.parseEther(amount)
                 });
             } else {
-                const tokenContract = new ethers.Contract(WARA_TOKEN_ADDRESS, [
+                const tokenContract = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, [
                     "function transfer(address to, uint256 amount) returns (bool)"
                 ], signer);
                 tx = await tokenContract.transfer(to, ethers.parseUnits(amount, 18));
@@ -140,11 +133,14 @@ export const setupWalletRoutes = (node: WaraNode) => {
 
         try {
             // Ensure fetch available
+            // @ts-ignore
+            const fetch = (await import('node-fetch')).default as any;
+
             // 1. Authenticate & Get Signer
-            let signer = node.getAuthenticatedSigner(req);
+            let signer = node.identity.getAuthenticatedSigner(req);
             // Fallback: If no session, try explicit auth with password
             if (!signer && walletAddress && password) {
-                signer = await node.getLocalUserWallet(walletAddress, password);
+                signer = await node.identity.getLocalUserWallet(walletAddress, password);
             }
             if (!signer) return res.status(401).json({ error: 'Authentication failed' });
 
@@ -152,14 +148,10 @@ export const setupWalletRoutes = (node: WaraNode) => {
             // --------------------------------------
             try {
                 // Find all remote nodes associated with this user
-                // We use the LocalProfile store or saved remote nodes
-                // We assume user tracks remote nodes in DB or localStorage-synced JSON
-                // Since this is backend, we check 'remote_nodes.json' if it exists or Prisma
-                const userId = req.headers['x-user-id']; // Optional hint
                 let remoteNodes: any[] = [];
 
                 // Try loading from saved nodes file (simple persistence)
-                const savedNodesPath = path.join(node.dataDir, 'saved_remote_nodes.json');
+                const savedNodesPath = path.join(CONFIG.DATA_DIR, 'saved_remote_nodes.json');
                 if (fs.existsSync(savedNodesPath)) {
                     const saved = JSON.parse(fs.readFileSync(savedNodesPath, 'utf-8'));
                     if (Array.isArray(saved)) remoteNodes = saved;
@@ -180,7 +172,7 @@ export const setupWalletRoutes = (node: WaraNode) => {
 
                 if (remoteNodes.length > 0) {
                     console.log(`[Wallet] Syncing proofs from ${remoteNodes.length} remote nodes...`);
-                    const proofsDir = path.join(node.dataDir, 'proofs');
+                    const proofsDir = path.join(CONFIG.DATA_DIR, 'proofs');
                     if (!fs.existsSync(proofsDir)) fs.mkdirSync(proofsDir);
 
                     for (const rNode of remoteNodes) {
@@ -231,13 +223,12 @@ export const setupWalletRoutes = (node: WaraNode) => {
 
             // Ensure signer is connected to provider
             if (!signer.provider) {
-                signer = signer.connect(node.provider);
+                signer = signer.connect(node.blockchain.provider);
             }
-            const contract = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, signer);
-            // const contract = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, signer); // No longer needed directly here
+            const contract = new ethers.Contract(CONFIG.CONTRACTS.AD_MANAGER, ABIS.AD_MANAGER, signer);
 
             // 2. Scan for Proofs
-            const proofsDir = path.join(node.dataDir, 'proofs');
+            const proofsDir = path.join(CONFIG.DATA_DIR, 'proofs');
             if (!fs.existsSync(proofsDir)) return res.json({ success: true, claimed: 0, message: "No proofs found" });
 
             const files = fs.readdirSync(proofsDir).filter(f => f.endsWith('.json'));
@@ -306,8 +297,7 @@ export const setupWalletRoutes = (node: WaraNode) => {
             // 4. Process Ad Batch
             if (adBatch.campaignIds.length > 0) {
                 console.log(`[Wallet] Claiming ${adBatch.campaignIds.length} ad rewards...`);
-                // Use the ABI we just updated in contracts.ts
-                const adContract = new ethers.Contract(AD_MANAGER_ADDRESS, AD_MANAGER_ABI, signer);
+                const adContract = new ethers.Contract(CONFIG.CONTRACTS.AD_MANAGER, ABIS.AD_MANAGER, signer);
 
                 try {
                     const tx = await adContract.batchClaimAdView(adBatch.campaignIds, adBatch.viewers, adBatch.contentHashes, adBatch.linkIds, adBatch.signatures);
@@ -316,7 +306,7 @@ export const setupWalletRoutes = (node: WaraNode) => {
                     results.txs.push(tx.hash);
 
                     // Archive files on success
-                    const archiveDir = path.join(node.dataDir, 'archive');
+                    const archiveDir = path.join(CONFIG.DATA_DIR, 'archive');
                     if (!fs.existsSync(archiveDir)) fs.mkdirSync(archiveDir);
                     for (const file of adBatch.filenames) {
                         try {
@@ -332,7 +322,7 @@ export const setupWalletRoutes = (node: WaraNode) => {
             // 5. Process Premium Batch
             if (premiumBatch.hosters.length > 0) {
                 console.log(`[Wallet] Claiming ${premiumBatch.hosters.length} premium rewards...`);
-                const subContract = new ethers.Contract(SUBSCRIPTION_ADDRESS, SUBSCRIPTIONS_ABI, signer);
+                const subContract = new ethers.Contract(CONFIG.CONTRACTS.SUBSCRIPTIONS, ABIS.SUBSCRIPTIONS, signer);
 
                 try {
                     const tx = await subContract.recordPremiumViewBatch(
@@ -348,7 +338,7 @@ export const setupWalletRoutes = (node: WaraNode) => {
                     results.txs.push(tx.hash);
 
                     // Archive premium proofs
-                    const archiveDir = path.join(node.dataDir, 'archive');
+                    const archiveDir = path.join(CONFIG.DATA_DIR, 'archive');
                     if (!fs.existsSync(archiveDir)) fs.mkdirSync(archiveDir);
                     for (const file of premiumBatch.filenames) {
                         try {
@@ -376,10 +366,10 @@ export const setupWalletRoutes = (node: WaraNode) => {
 
         try {
             // 1. Authenticate
-            const wallet = await node.getLocalUserWallet(walletAddress, password);
+            const wallet = await node.identity.getLocalUserWallet(walletAddress, password);
             if (!wallet) return res.status(401).json({ error: 'Authentication failed' });
 
-            const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+            const provider = node.blockchain.provider;
             const signer = wallet.connect(provider);
 
             // 1.1 SYNC REMOTE VOTES (Unified Governor)
@@ -391,7 +381,7 @@ export const setupWalletRoutes = (node: WaraNode) => {
 
                 if (userProfile && userProfile.remoteNodes.length > 0) {
                     console.log(`[Wallet] Syncing votes from ${userProfile.remoteNodes.length} remote nodes...`);
-                    const votesDir = path.join(node.dataDir, 'votes');
+                    const votesDir = path.join(CONFIG.DATA_DIR, 'votes');
                     if (!fs.existsSync(votesDir)) fs.mkdirSync(votesDir);
 
                     for (const rNode of userProfile.remoteNodes) {
@@ -429,7 +419,7 @@ export const setupWalletRoutes = (node: WaraNode) => {
             } catch (e) { console.error("Remote Vote Sync Failed", e); }
 
             // 2. Scan for Signed Votes
-            const votesDir = path.join(node.dataDir, 'votes');
+            const votesDir = path.join(CONFIG.DATA_DIR, 'votes');
             if (!fs.existsSync(votesDir)) return res.json({ success: true, submitted: 0, message: "No pending votes" });
 
             const files = fs.readdirSync(votesDir).filter(f => f.endsWith('.json'));
@@ -479,10 +469,7 @@ export const setupWalletRoutes = (node: WaraNode) => {
             console.log(`[Wallet] Batch processing ${batch.linkIds.length} votes...`);
 
             // 4. Send Batch Transaction
-            const abi = [
-                "function batchVoteWithSignature(bytes32[] linkIds, bytes32[] contentHashes, int8[] values, address[] voters, uint256[] nonces, uint256[] timestamps, bytes[] signatures) external"
-            ];
-            const contract = new ethers.Contract(LINK_REGISTRY_ADDRESS, abi, signer);
+            const contract = new ethers.Contract(CONFIG.CONTRACTS.LINK_REGISTRY, ABIS.LINK_REGISTRY, signer);
 
             const tx = await contract.batchVoteWithSignature(
                 batch.linkIds,
@@ -516,13 +503,13 @@ export const setupWalletRoutes = (node: WaraNode) => {
     //EXPORT PROFF
 
     // GET /api/wallet/export-proofs (For remote syncing - Protected)
-    router.get('/export-proofs', node.requireAuth, async (req: Request, res: Response) => {
+    router.get('/export-proofs', node.identity.requireAuth, async (req: Request, res: Response) => {
         try {
             const { wallet } = req.query;
             if (!wallet) return res.status(400).json({ error: 'Missing wallet' });
 
             const targetWallet = (wallet as string).toLowerCase();
-            const proofsDir = path.join(node.dataDir, 'proofs');
+            const proofsDir = path.join(CONFIG.DATA_DIR, 'proofs');
 
             if (!fs.existsSync(proofsDir)) return res.json({ proofs: [] });
 
@@ -548,12 +535,12 @@ export const setupWalletRoutes = (node: WaraNode) => {
     });
 
     // GET /api/wallet/export-votes (Remote Sync)
-    router.get('/export-votes', node.requireAuth, async (req: Request, res: Response) => {
+    router.get('/export-votes', node.identity.requireAuth, async (req: Request, res: Response) => {
         try {
             const { wallet } = req.query; // Filter by voter wallet
             if (!wallet) return res.status(400).json({ error: 'Missing wallet' });
 
-            const votesDir = path.join(node.dataDir, 'votes');
+            const votesDir = path.join(CONFIG.DATA_DIR, 'votes');
             if (!fs.existsSync(votesDir)) return res.json({ votes: [] });
 
             const files = fs.readdirSync(votesDir).filter(f => f.endsWith('.json'));

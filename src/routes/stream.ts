@@ -1,18 +1,18 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
 import { WaraMap } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, AD_MANAGER_ADDRESS } from '../contracts';
+import { CONFIG, ABIS } from '../config/config';
+import { ethers } from 'ethers';
 
-
-export const setupStreamRoutes = (node: WaraNode) => {
+export const setupStreamRoutes = (node: App) => {
     const router = Router();
     // GET /stream/auth
     router.get('/auth', async (req: Request, res: Response) => {
         const { wallet, linkId } = req.query;
-        const viewerIp = req.socket.remoteAddress;
+        const viewerIp = req.socket.remoteAddress || '0.0.0.0';
 
         try {
             const { ethers } = await import('ethers');
@@ -43,7 +43,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
             // I will assume both exist and need to be public.
 
             // The code I read uses `this.activeSessions.get(sessionKey)`
-            const localSession = node.activeSessions.get(sessionKey);
+            const localSession = node.identity.activeSessions.get(sessionKey);
 
             if (localSession && localSession > Date.now()) {
                 return res.json({
@@ -57,9 +57,8 @@ export const setupStreamRoutes = (node: WaraNode) => {
             // 3. NEW: Check Premium Subscription (On-Chain)
             if (wallet && typeof wallet === 'string') {
                 try {
-                    // Assuming node.subContract is initialized in node.ts
                     // @ts-ignore
-                    const isSubscribed = await node.subContract.isSubscribed(wallet);
+                    const isSubscribed = await node.blockchain.subscriptions!.isSubscribed(wallet);
 
                     if (isSubscribed) {
                         return res.json({
@@ -86,10 +85,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
             // ... Full logic copy ...
             let nextId = BigInt(0);
             try {
-                // Check if adManager exists on node (it might be initialized inside init)
-                // If it's private, I will make it public.
-                // @ts-ignore
-                if (node.adManager) nextId = await node.adManager.nextCampaignId();
+                if (node.blockchain.adManager) nextId = await node.blockchain.adManager.nextCampaignId();
             } catch (e) {
                 console.warn("Failed to fetch campaigns from chain");
             }
@@ -98,8 +94,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
 
             for (let i = Number(nextId) - 1; i >= 0; i--) {
                 try {
-                    // @ts-ignore
-                    const campaign = await node.adManager.getCampaign(i);
+                    const campaign = await node.blockchain.adManager!.getCampaign(i);
                     if (campaign.active && Number(campaign.viewsRemaining) > 0) {
                         selectedAd = {
                             id: i,
@@ -131,16 +126,16 @@ export const setupStreamRoutes = (node: WaraNode) => {
     });
     //GET /stream/:id/map
     router.get('/map', (req: Request, res: Response) => {
-        const link = node.links.get(req.params.id);
+        const link = node.catalog.getLink(req.params.id);
         if (!link) return res.status(404).json({ error: 'Link not found' });
 
-        const effectiveHost = node.publicIp ? node.publicIp : (req.headers.host?.split(':')[0] || 'localhost');
-        const isSystemBusy = node.isSystemOverloaded();
-        const isFull = link.activeStreams >= node.globalMaxStreams;
-        const reportedActive = isSystemBusy ? node.globalMaxStreams : link.activeStreams;
+        const effectiveHost = node.identity.publicIp ? node.identity.publicIp : (req.headers.host?.split(':')[0] || 'localhost');
+        const isSystemBusy = node.catalog.isSystemOverloaded();
+        const isFull = link.activeStreams >= node.catalog.globalMaxStreams;
+        const reportedActive = isSystemBusy ? node.catalog.globalMaxStreams : link.activeStreams;
 
         const sessionKey = `${req.ip}_${link.id}`;
-        const expiry = node.activeSessions.get(sessionKey);
+        const expiry = node.identity.activeSessions.get(sessionKey);
 
         // Bypass check
         const viewerParam = req.query.viewer as string;
@@ -153,12 +148,12 @@ export const setupStreamRoutes = (node: WaraNode) => {
         const liveMap: WaraMap & { adRequired: boolean, key?: string } = {
             ...link.map,
             status: (isFull || isSystemBusy) ? 'busy' : 'online',
-            publicEndpoint: `http://${effectiveHost}:${node.port}/stream/${link.id}`,
+            publicEndpoint: `http://${effectiveHost}:${CONFIG.PORT}/stream/${link.id}`,
             adRequired: adRequired,
             key: link.key, // EXPOSE KEY IN MAP FOR RECOVERY
             stats: {
                 activeStreams: reportedActive,
-                maxStreams: node.globalMaxStreams
+                maxStreams: node.catalog.globalMaxStreams
             }
         };
 
@@ -167,17 +162,17 @@ export const setupStreamRoutes = (node: WaraNode) => {
 
     //GET /stream/:id/stream
     router.get('/:id/stream', (req: Request, res: Response) => {
-        const link = node.links.get(req.params.id);
+        const link = node.catalog.getLink(req.params.id);
         if (!link) return res.status(404).json({ error: 'Link not found' });
 
-        if (node.isSystemOverloaded() || link.activeStreams >= node.globalMaxStreams) {
+        if (node.catalog.isSystemOverloaded() || link.activeStreams >= node.catalog.globalMaxStreams) {
             return res.status(503).json({ error: 'System busy' });
         }
 
         // --- AD ENFORCEMENT ---
         const linkId = req.params.id;
         const sessionKey = `${req.ip}_${linkId}`;
-        const sessionExpiry = node.activeSessions.get(sessionKey);
+        const sessionExpiry = node.identity.activeSessions.get(sessionKey);
 
         // Bypass for: Localhost browsing local node
         const isLocal = req.ip === '::1' || req.ip === '127.0.0.1' || req.ip === '::ffff:127.0.0.1';
@@ -280,9 +275,9 @@ export const setupStreamRoutes = (node: WaraNode) => {
         if (!/^[a-z0-9]+$/i.test(id) || !/^[a-z]+$/i.test(lang)) return res.status(400).end();
 
         // Try vtt then srt
-        let subPath = path.join(node.dataDir, `${id}_${lang}.vtt`);
+        let subPath = path.join(CONFIG.DATA_DIR, `${id}_${lang}.vtt`);
         if (!fs.existsSync(subPath)) {
-            subPath = path.join(node.dataDir, `${id}_${lang}.srt`);
+            subPath = path.join(CONFIG.DATA_DIR, `${id}_${lang}.srt`);
         }
 
         if (fs.existsSync(subPath)) {
@@ -391,7 +386,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
             const urlLinkIdHash = linkId.startsWith('0x') ? linkId : ethers.id(linkId);
 
             // 2. Resolve Official Uploader from Blockchain
-            const reputationContract = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, node.provider);
+            const reputationContract = new ethers.Contract(CONFIG.CONTRACTS.LINK_REGISTRY, ABIS.LINK_REGISTRY, node.blockchain.provider);
             let officialUploader: string = "";
 
             try {
@@ -402,7 +397,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
 
             if (!officialUploader || officialUploader === ethers.ZeroAddress) {
                 // If not registered on-chain, the reward goes to the Node Owner (Service Provider)
-                officialUploader = node.nodeOwner || node.nodeSigner?.address || "";
+                officialUploader = node.identity.nodeOwner || node.identity.nodeSigner?.address || "";
                 if (!officialUploader) {
                     return res.status(404).json({ error: 'Link owner and node identity not identifiable' });
                 }
@@ -415,7 +410,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
             // MUST MATCH SMART CONTRACT
             const messageHash = ethers.solidityPackedKeccak256(
                 ["uint256", "address", "address", "bytes32", "bytes32", "uint256", "address"],
-                [campaignId, officialUploader, viewerAddress, hexContentHash, urlLinkIdHash, (await node.provider.getNetwork()).chainId, AD_MANAGER_ADDRESS]
+                [campaignId, officialUploader, viewerAddress, hexContentHash, urlLinkIdHash, (await node.blockchain.provider.getNetwork()).chainId, CONFIG.CONTRACTS.AD_MANAGER]
             );
 
             const recovered = ethers.verifyMessage(ethers.getBytes(messageHash), signature);
@@ -429,7 +424,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
 
             // 4. Save Proof
             const proofId = `${Date.now()}_${viewerAddress.substring(0, 8)}`;
-            const proofsDir = path.join(node.dataDir, 'proofs');
+            const proofsDir = path.join(CONFIG.DATA_DIR, 'proofs');
             if (!fs.existsSync(proofsDir)) fs.mkdirSync(proofsDir, { recursive: true });
 
             const proofPath = path.join(proofsDir, `${proofId}.json`);
@@ -452,7 +447,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
 
             // Record Session for this IP and Link
             const sessionKey = `${req.ip}_${linkId}`;
-            node.activeSessions.set(sessionKey, Date.now() + 4 * 60 * 60 * 1000);
+            node.identity.activeSessions.set(sessionKey, Date.now() + 4 * 60 * 60 * 1000);
         } catch (e) {
             console.error("Failed to store ad proof:", e);
             res.status(500).json({ error: 'Internal storage error' });
@@ -475,7 +470,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
 
             let officialHoster = hoster;
             if (!officialHoster) {
-                const reputationContract = new ethers.Contract(LINK_REGISTRY_ADDRESS, LINK_REGISTRY_ABI, node.provider);
+                const reputationContract = new ethers.Contract(CONFIG.CONTRACTS.LINK_REGISTRY, ABIS.LINK_REGISTRY, node.blockchain.provider);
                 try {
                     const stats = await reputationContract.getLinkStats(urlLinkIdHash);
                     officialHoster = stats.hoster;
@@ -483,7 +478,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
             }
 
             if (!officialHoster || officialHoster === ethers.ZeroAddress) {
-                officialHoster = node.nodeOwner || node.nodeSigner?.address || "";
+                officialHoster = node.identity.nodeOwner || node.identity.nodeSigner?.address || "";
             }
 
             if (!officialHoster) return res.status(404).json({ error: "Hoster identity not found" });
@@ -492,7 +487,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
             // keccak256(abi.encodePacked(hoster, viewer, contentHash, nonce, block.chainid))
             const messageHash = ethers.solidityPackedKeccak256(
                 ["address", "address", "bytes32", "uint256", "uint256"],
-                [officialHoster, wallet, hexContentHash, nonce, node.chainId || 1] // Default to 1 if not set, but node should have chainId
+                [officialHoster, wallet, hexContentHash, nonce, CONFIG.CHAIN_ID || 1] // Default to 1 if not set
             );
 
             const recovered = ethers.verifyMessage(ethers.getBytes(messageHash), signature);
@@ -501,16 +496,14 @@ export const setupStreamRoutes = (node: WaraNode) => {
             }
 
             // 3. Verify Subscription (Optional but recommended for session grant)
-            // @ts-ignore
-            if (node.subContract) {
-                // @ts-ignore
-                const isSubscribed = await node.subContract.isSubscribed(wallet);
+            if (node.blockchain.subscriptions) {
+                const isSubscribed = await node.blockchain.subscriptions.isSubscribed(wallet);
                 if (!isSubscribed) return res.status(403).json({ error: "No active subscription" });
             }
 
             // 4. Store Proof
             const proofId = `premium_${Date.now()}_${wallet.substring(0, 8)}`;
-            const proofsDir = path.join(node.dataDir, 'proofs');
+            const proofsDir = path.join(CONFIG.DATA_DIR, 'proofs');
             if (!fs.existsSync(proofsDir)) fs.mkdirSync(proofsDir, { recursive: true });
 
             fs.writeFileSync(path.join(proofsDir, `${proofId}.json`), JSON.stringify({
@@ -526,7 +519,7 @@ export const setupStreamRoutes = (node: WaraNode) => {
 
             // 5. Grant Session
             const sessionKey = `${req.ip}_${linkId}`;
-            node.activeSessions.set(sessionKey, Date.now() + 4 * 60 * 60 * 1000);
+            node.identity.activeSessions.set(sessionKey, Date.now() + 4 * 60 * 60 * 1000);
 
             res.json({ success: true, message: "Premium proof accepted." });
 

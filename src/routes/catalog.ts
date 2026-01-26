@@ -1,21 +1,22 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
-import { getMediaMetadata, searchTMDB, getSeasonDetails } from '../tmdb';
+import { App } from '../App';
+import { CONFIG } from '../config/config';
+import { getMediaMetadata, searchTMDB, getSeasonDetails } from '../utils/tmdb';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export const setupCatalogRoutes = (node: WaraNode) => {
+export const setupCatalogRoutes = (node: App) => {
     const router = Router();
     // --- NEW: Public Catalog (For P2P Sync) ---
     router.get('/catalog', (req: Request, res: Response) => {
-        const baseUrl = `http://${node.publicIp || 'localhost'}:${node.port}`;
+        const baseUrl = `http://${node.identity.publicIp || 'localhost'}:${CONFIG.PORT}`;
         const hosterFilter = req.query.hoster as string;
 
         // Group links by tmdbId
         const mediaMap = new Map<string, any>();
         const episodes: any[] = [];
 
-        for (const link of node.links.values()) {
+        for (const link of node.catalog.links.values()) {
             // Apply filter if provided
             if (hosterFilter && link.map.hosterAddress !== hosterFilter) continue;
 
@@ -44,8 +45,8 @@ export const setupCatalogRoutes = (node: WaraNode) => {
 
             // Add or update media entry
             if (!mediaMap.has(sourceId)) {
-                const hasPoster = fs.existsSync(path.join(node.dataDir, 'posters', `${sourceId}.jpg`));
-                const hasBackdrop = fs.existsSync(path.join(node.dataDir, 'backdrops', `${sourceId}.jpg`));
+                const hasPoster = fs.existsSync(path.join(CONFIG.DATA_DIR, 'posters', `${sourceId}.jpg`));
+                const hasBackdrop = fs.existsSync(path.join(CONFIG.DATA_DIR, 'backdrops', `${sourceId}.jpg`));
 
                 mediaMap.set(sourceId, {
                     sourceId,
@@ -63,8 +64,8 @@ export const setupCatalogRoutes = (node: WaraNode) => {
             media: Array.from(mediaMap.values()),
             episodes,
             nodeInfo: {
-                nodeId: node.nodeId,
-                nodeName: node.nodeName,
+                nodeId: node.identity.nodeSigner?.address || 'unknown',
+                nodeName: node.identity.nodeName,
                 endpoint: baseUrl
             }
         });
@@ -87,7 +88,7 @@ export const setupCatalogRoutes = (node: WaraNode) => {
         const { sourceId } = req.params;
         if (!/^[a-z0-9_-]+$/i.test(sourceId)) return res.status(400).end();
 
-        const posterPath = path.join(node.dataDir, 'posters', `${sourceId}.jpg`);
+        const posterPath = path.join(CONFIG.DATA_DIR, 'posters', `${sourceId}.jpg`);
         if (fs.existsSync(posterPath)) {
             res.setHeader('Cache-Control', 'public, max-age=31536000');
             res.sendFile(posterPath);
@@ -100,7 +101,7 @@ export const setupCatalogRoutes = (node: WaraNode) => {
         const { sourceId } = req.params;
         if (!/^[a-z0-9_-]+$/i.test(sourceId)) return res.status(400).end();
 
-        const backdropPath = path.join(node.dataDir, 'backdrops', `${sourceId}.jpg`);
+        const backdropPath = path.join(CONFIG.DATA_DIR, 'backdrops', `${sourceId}.jpg`);
         if (fs.existsSync(backdropPath)) {
             res.setHeader('Cache-Control', 'public, max-age=31536000');
             res.sendFile(backdropPath);
@@ -116,7 +117,7 @@ export const setupCatalogRoutes = (node: WaraNode) => {
             return res.status(400).end();
         }
 
-        const stillPath = path.join(node.dataDir, 'episode-stills', sourceId, `s${season}e${episode}.jpg`);
+        const stillPath = path.join(CONFIG.DATA_DIR, 'episode-stills', sourceId, `s${season}e${episode}.jpg`);
         if (fs.existsSync(stillPath)) {
             res.setHeader('Cache-Control', 'public, max-age=31536000');
             res.sendFile(stillPath);
@@ -276,30 +277,28 @@ export const setupCatalogRoutes = (node: WaraNode) => {
         const genre = req.query.genre as string;
         try {
             // 1. Find all links first (Source of Truth for Availability)
-            const allLinks = await node.prisma.link.findMany({
-                distinct: ['sourceId'],
-                select: { sourceId: true }
+            const prismaContent = await node.prisma.link.findMany({
+                where: {},
+                orderBy: { trustScore: 'desc' }
             });
-            const availableSourceIds = allLinks.map(l => l.sourceId);
 
-            if (availableSourceIds.length === 0) {
+            const results = await node.catalog.getResolvedCatalog(prismaContent);
+
+            if (results.length === 0) {
                 console.log(`[Catalog] /unverified: No links found in DB.`);
                 return res.json([]);
             }
 
-            // 2. Find Media that MATCHES these links but is NOT approved
-            const unverifiedMedia = await node.prisma.media.findMany({
-                where: {
-                    sourceId: { in: availableSourceIds },
-                    status: { not: 'approved' },
-                    ...(genre ? { genre: { contains: genre } } : {})
-                },
-                take: 50,
-                orderBy: { createdAt: 'desc' }
-            });
-
-            const movies = unverifiedMedia.map(m => ({ base: m, isAvailable: true }));
-            res.json(movies);
+            // Group by sourceId (unverified view often shows unique media)
+            const unique = [];
+            const seen = new Set();
+            for (const item of results) {
+                if (!seen.has(item.id)) { // Using ID as proxy for unique Media in this context
+                    unique.push(item);
+                    seen.add(item.id);
+                }
+            }
+            res.json(unique);
         } catch (e: any) {
             res.status(500).json({ error: e.message });
         }
@@ -349,15 +348,15 @@ export const setupCatalogRoutes = (node: WaraNode) => {
 
         // 0. Strict Identity Check (Must be an active USER session)
         const authToken = (req.headers['x-auth-token'] || req.body.authToken) as string;
-        const signer = node.activeWallets.get(authToken);
+        const signer = node.identity.activeWallets.get(authToken);
         if (!signer) return res.status(401).json({ error: "Unauthorized: Active USER session required" });
 
         try {
             // 1. Ensure Media/Hash exists on Blockchain (Lazy Registration)
-            if (node.mediaRegistry) {
+            if (node.blockchain.mediaRegistry) {
                 let onChain = false;
                 try {
-                    const [exists] = await node.mediaRegistry.exists(String(source), String(finalSourceId));
+                    const [exists] = await node.blockchain.mediaRegistry.exists(String(source), String(finalSourceId));
                     onChain = exists;
                 } catch (e: any) {
                     console.warn(`[Catalog] Registry check failed: ${e.message}`);
@@ -371,7 +370,7 @@ export const setupCatalogRoutes = (node: WaraNode) => {
                     // 1.1 Universal Request Registration (Proposal)
                     try {
                         console.log(`[Web3] Registering Requested Media on-chain: ${media.title}`);
-                        const registryWrite = node.mediaRegistry.connect(signer);
+                        const registryWrite = node.blockchain.mediaRegistry.connect(signer);
                         const tx = await (registryWrite as any).registerMedia(
                             String(media.source),
                             String(media.sourceId),

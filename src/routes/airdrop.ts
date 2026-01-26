@@ -1,11 +1,12 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
-import fs from 'fs';
-import path from 'path';
+import { App } from '../App';
+import * as fs from 'fs';
+import * as path from 'path';
+import { CONFIG } from '../config/config';
 
-export const setupAirdropRoutes = (node: WaraNode) => {
+export const setupAirdropRoutes = (node: App) => {
     const router = Router();
-    const contract = node.airdropContract;
+    const contract = node.blockchain.airdrop!;
     // GET /state
     router.get('/state', async (req: Request, res: Response) => {
         try {
@@ -16,7 +17,7 @@ export const setupAirdropRoutes = (node: WaraNode) => {
             let userRegistered = false;
             let userClaimed = false;
 
-            const userSigner = node.getAuthenticatedSigner(req);
+            const userSigner = node.identity.getAuthenticatedSigner(req);
             if (userSigner) {
                 userRegistered = await contract.isRegistered(userSigner.address);
                 if (currentCycleId > 0) {
@@ -41,10 +42,10 @@ export const setupAirdropRoutes = (node: WaraNode) => {
     // POST /api/airdrop/register
     router.post('/register', async (req: Request, res: Response) => {
         try {
-            const userSigner = node.getAuthenticatedSigner(req);
+            const userSigner = node.identity.getAuthenticatedSigner(req);
             if (!userSigner) return res.status(401).json({ error: 'Unauthorized' });
 
-            const connectedSigner = userSigner.connect(node.provider);
+            const connectedSigner = userSigner.connect(node.blockchain.provider);
             const contractWithUser = contract.connect(connectedSigner) as any;
 
             console.log(`[Airdrop] Registering user: ${userSigner.address}`);
@@ -63,12 +64,12 @@ export const setupAirdropRoutes = (node: WaraNode) => {
         let { cycleId, amount, merkleProof } = req.body;
 
         try {
-            const userSigner = node.getAuthenticatedSigner(req);
+            const userSigner = node.identity.getAuthenticatedSigner(req);
 
             // AUTO-PROOF LOOKUP
             if (userSigner && (!merkleProof || merkleProof.length === 0)) {
 
-                const airdropDir = path.join(node.dataDir, 'airdrops');
+                const airdropDir = path.join(CONFIG.DATA_DIR, 'airdrops');
 
                 if (fs.existsSync(airdropDir)) {
                     const files = fs.readdirSync(airdropDir);
@@ -89,7 +90,7 @@ export const setupAirdropRoutes = (node: WaraNode) => {
             }
             if (!userSigner) return res.status(401).json({ error: 'Unauthorized' });
 
-            const connectedSigner = userSigner.connect(node.provider);
+            const connectedSigner = userSigner.connect(node.blockchain.provider);
             const contractWithUser = contract.connect(connectedSigner) as any;
 
             console.log(`[Airdrop] Claiming for user: ${userSigner.address}, Cycle: ${cycleId}`);

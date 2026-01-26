@@ -1,23 +1,23 @@
 import { Router, Request, Response } from 'express';
-import { WaraNode } from '../node';
+import { App } from '../App';
+import { CONFIG } from '../config/config';
 
-//Organizar endpoints
-export const setupNetworkRoutes = (node: WaraNode) => {
+export const setupNetworkRoutes = (node: App) => {
     const router = Router();
     // GET /identity (Expose technical wallet for voting rewards)
     router.get('/identity', (req: Request, res: Response) => {
-        if (!node.nodeSigner) return res.status(500).json({ error: 'Node identity not initialized' });
+        if (!node.identity.nodeSigner) return res.status(500).json({ error: 'Node identity not initialized' });
         res.json({
-            nodeAddress: node.nodeSigner.address,
-            nodeName: node.nodeName || null,
-            publicIp: node.publicIp || null
+            nodeAddress: node.identity.nodeSigner.address,
+            nodeName: node.identity.nodeName || null,
+            publicIp: node.identity.publicIp || null
         });
     });
 
     // --- Gossip / Discovery (Phonebook) ---
     router.get('/peers', async (req: Request, res: Response) => {
         // Return my own info + everyone I know
-        const peers = Array.from(node.knownPeers.entries()).map(([name, data]) => ({
+        const peers = Array.from(node.p2p.knownPeers.entries()).map(([name, data]) => ({
             name,
             endpoint: data.endpoint,
             lastSeen: data.lastSeen,
@@ -25,11 +25,11 @@ export const setupNetworkRoutes = (node: WaraNode) => {
         }));
 
         // Add myself if I have an identity
-        if (node.nodeSigner && node.publicIp) {
-            const identifier = node.nodeName || node.nodeSigner.address;
-            const endpoint = `http://${node.publicIp}:${node.port}`;
+        if (node.identity.nodeSigner && node.identity.publicIp) {
+            const identifier = node.identity.nodeName || node.identity.nodeSigner.address;
+            const endpoint = `http://${node.identity.publicIp}:${CONFIG.PORT}`;
             const message = `WaraNode:${identifier}:${endpoint}`;
-            const signature = await node.nodeSigner.signMessage(message);
+            const signature = await node.identity.nodeSigner.signMessage(message);
 
             peers.push({
                 name: identifier,
@@ -48,24 +48,25 @@ export const setupNetworkRoutes = (node: WaraNode) => {
         if (Array.isArray(peers)) {
             let newPeers = 0;
             peers.forEach(async (p: any) => {
-                if (p.name && p.endpoint && p.name !== node.nodeName) {
+                if (p.name && p.endpoint && p.name !== node.identity.nodeName) {
                     // Cryptographic Verification
-                    const verified = await node.verifyPeerIdentity(p.name, p.endpoint, p.signature);
+                    const verified = await node.p2p.verifyPeerIdentity(p.name, p.endpoint, p.signature);
 
                     // Update phonebook
-                    node.knownPeers.set(p.name, {
+                    node.p2p.knownPeers.set(p.name, {
                         endpoint: p.endpoint,
                         lastSeen: Date.now(),
                         signature: p.signature,
                         walletAddress: verified?.address,
-                        isTrusted: !!verified
+                        isTrusted: !!verified,
+                        name: p.name
                     });
                     newPeers++;
                 }
             });
             if (newPeers > 0) {
                 console.log(`[Gossip] Updated ${newPeers} peer locations.`);
-                node.savePeers();
+                node.p2p.savePeers();
             }
         }
         res.json({ success: true });
@@ -88,7 +89,9 @@ export const setupNetworkRoutes = (node: WaraNode) => {
             endpoint = target;
             console.log(`[Network] Target detected as URL: ${endpoint}. Finding name...`);
             try {
-                const resPeers = await fetch(`${endpoint}/api/network/peers`).then(r => r.json());
+                // @ts-ignore
+                const fetch = (await import('node-fetch')).default as any;
+                const resPeers = await fetch(`${endpoint}/api/network/peers`).then((r: any) => r.json());
                 const self = Array.isArray(resPeers) ? resPeers.find((p: any) => p.endpoint && (p.endpoint.includes(endpoint!) || endpoint!.includes(p.endpoint))) : null;
                 if (self && self.name) {
                     name = self.name;
@@ -104,7 +107,7 @@ export const setupNetworkRoutes = (node: WaraNode) => {
             name = target;
             console.log(`[Network] Target detected as Name: ${name}. Resolving Sentinel IP...`);
             // resolveSentinelNode returns Promise<string | null>
-            const resolved = await node.resolveSentinelNode(name!);
+            const resolved = await node.p2p.resolveSentinelNode(name!);
             if (!resolved) {
                 return res.status(404).json({ error: `Could not resolve IP for ${name}` });
             }
@@ -113,7 +116,8 @@ export const setupNetworkRoutes = (node: WaraNode) => {
 
         // 2. Connect
         if (name && endpoint) {
-            node.knownPeers.set(name, {
+            node.p2p.knownPeers.set(name, {
+                name,
                 endpoint,
                 lastSeen: Date.now(),
                 signature: undefined
@@ -137,10 +141,10 @@ export const setupNetworkRoutes = (node: WaraNode) => {
         try {
             const rpcBody = req.body;
             // Record usage for fairness
-            node.rpcManager.trackRequest();
+            node.blockchain.rpcManager.trackRequest();
 
             // Forward to internal provider's endpoint
-            const result = await node.provider.send(rpcBody.method, rpcBody.params);
+            const result = await node.blockchain.provider.send(rpcBody.method, rpcBody.params);
             res.json({
                 jsonrpc: "2.0",
                 id: rpcBody.id,
@@ -165,7 +169,7 @@ export const setupNetworkRoutes = (node: WaraNode) => {
         ];
 
         // Add peers that are providing RPC service
-        const peersProvidingRpc = Array.from(node.knownPeers.values())
+        const peersProvidingRpc = Array.from(node.p2p.knownPeers.values())
             .filter(p => p.isTrusted) // Only trust verified nodes
             .map(p => `${p.endpoint}/api/network/rpc-proxy`);
 

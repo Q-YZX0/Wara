@@ -3,5 +3,6 @@ dist/
 test/
 .env
 wara_store
+data
 *.log
 *.db
