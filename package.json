@@ -1,6 +1,6 @@
 {
     "name": "wara-node",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Wara Links Library",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -11,8 +11,8 @@
         "bundle": "npm run build && pkg dist/index.js --targets node18-win-x64 --output wara-node.exe"
     },
     "keywords": [],
-    "author": "",
-    "license": "ISC",
+    "author": "YZX0",
+    "license": "MIT",
     "dependencies": {
         "@prisma/client": "^5.22.0",
         "axios": "^1.6.0",
