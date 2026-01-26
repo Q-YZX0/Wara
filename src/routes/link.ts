@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { ethers } from 'ethers';
+import axios from 'axios';
 import { App } from '../App';
 import { getMediaMetadata } from '../utils/tmdb';
 import * as path from 'path';
@@ -446,10 +447,8 @@ export const setupLinkRoutes = (node: App) => {
                 }
 
                 console.log(`[Vote] Upvote signed for Hoster: ${relayer}. Relaying to ${targetUrl}`);
-                const response = await fetch(`${targetUrl}/links/vote/submit`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ linkId, contentHash, voteValue, voter, relayer, signature, nonce, timestamp })
+                const response = await axios.post(`${targetUrl}/links/vote/submit`, {
+                    linkId, contentHash, voteValue, voter, relayer, signature, nonce, timestamp
                 });
 
                 res.json({ success: true, relayedTo: targetUrl });
@@ -469,12 +468,8 @@ export const setupLinkRoutes = (node: App) => {
                     const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
                     console.log(`[Vote] No peers found for downvote. Relaying to self...`);
-                    // @ts-ignore
-                    const fetch = (await import('node-fetch')).default as any;
-                    await fetch(`http://localhost:${CONFIG.PORT}/links/vote/submit`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ linkId, contentHash, voteValue, voter, relayer, signature, nonce, timestamp })
+                    await axios.post(`http://localhost:${CONFIG.PORT}/links/vote/submit`, {
+                        linkId, contentHash, voteValue, voter, relayer, signature, nonce, timestamp
                     });
                     res.json({ success: true, relayedTo: 'local' });
                 } else {
@@ -488,10 +483,8 @@ export const setupLinkRoutes = (node: App) => {
                         );
                         const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
-                        return fetch(`${peer.endpoint}/links/vote/submit`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ linkId, contentHash, voteValue, voter, relayer, signature, nonce, timestamp })
+                        return axios.post(`${peer.endpoint}/links/vote/submit`, {
+                            linkId, contentHash, voteValue, voter, relayer, signature, nonce, timestamp
                         });
                     }));
 
@@ -591,14 +584,9 @@ export const setupLinkRoutes = (node: App) => {
                     console.log(`[Vote] Gossiping downvote to ${targets.length} peers...`);
 
                     // Fire and forget - don't await
-                    // @ts-ignore
-                    const fetch = (await import('node-fetch')).default as any;
                     Promise.allSettled(targets.map(peer =>
-                        fetch(`${peer.endpoint}/links/vote/submit`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(req.body) // Forward original payload
-                        }).catch((err: any) => console.error(`Gossip failed to ${peer.endpoint}`, err.message))
+                        axios.post(`${peer.endpoint}/links/vote/submit`, req.body)
+                            .catch((err: any) => console.error(`Gossip failed to ${peer.endpoint}`, err.message))
                     ));
                 }
             }

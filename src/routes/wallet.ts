@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { App } from '../App';
 import { ethers } from 'ethers';
+import axios from 'axios';
 import { decryptPayload } from '../utils/encryption';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -132,10 +133,6 @@ export const setupWalletRoutes = (node: App) => {
         if (!walletAddress) return res.status(400).json({ error: 'Missing wallet address' });
 
         try {
-            // Ensure fetch available
-            // @ts-ignore
-            const fetch = (await import('node-fetch')).default as any;
-
             // 1. Authenticate & Get Signer
             let signer = node.identity.getAuthenticatedSigner(req);
             // Fallback: If no session, try explicit auth with password
@@ -187,11 +184,11 @@ export const setupWalletRoutes = (node: App) => {
                             if (!adminKey) continue;
 
                             const exportUrl = `${rNode.url}/api/wallet/export-proofs?wallet=${signer.address}`;
-                            const resp = await fetch(exportUrl, { headers: { 'X-Wara-Key': adminKey } });
+                            const resp = await axios.get(exportUrl, { headers: { 'X-Wara-Key': adminKey } });
 
-                            if (!resp.ok) continue;
+                            if (resp.status !== 200) continue;
 
-                            const { proofs } = await resp.json();
+                            const { proofs } = resp.data;
                             if (Array.isArray(proofs) && proofs.length > 0) {
                                 console.log(`[Wallet] Downloaded ${proofs.length} proofs from ${rNode.url}`);
 
@@ -205,14 +202,10 @@ export const setupWalletRoutes = (node: App) => {
                                 }
 
                                 // Delete from remote to avoid double processing
-                                await fetch(`${rNode.url}/admin/proofs/delete`, {
-                                    method: 'POST',
-                                    headers: {
-                                        'Content-Type': 'application/json',
-                                        'X-Wara-Key': adminKey
-                                    },
-                                    body: JSON.stringify({ filenames: importedFilenames })
-                                });
+                                await axios.post(`${rNode.url}/admin/proofs/delete`,
+                                    { filenames: importedFilenames },
+                                    { headers: { 'X-Wara-Key': adminKey } }
+                                );
                             }
 
                         } catch (e) { console.warn(`Failed to sync ${rNode.url}`, e); }
@@ -274,7 +267,7 @@ export const setupWalletRoutes = (node: App) => {
                             // Default to Ad Proof
                             // FIX: Validate LinkID format
                             if (!proof.linkId || !proof.linkId.startsWith('0x') || proof.linkId.length !== 66) {
-                                console.warn(`[Wallet] Skipping ad proof with invalid LinkID format: ${file}`);
+                                console.warn(`[Wallet] Skipping ad proof with invalid LinkID format: ${file} `);
                                 continue;
                             }
 
@@ -394,12 +387,12 @@ export const setupWalletRoutes = (node: App) => {
                             if (!adminKey) continue;
 
                             const exportUrl = `${rNode.url}/api/wallet/export-votes?wallet=${signer.address}`;
-                            const resp = await fetch(exportUrl, { headers: { 'X-Wara-Key': adminKey } });
-                            if (!resp.ok) continue;
+                            const resp = await axios.get(exportUrl, { headers: { 'X-Wara-Key': adminKey } });
+                            if (resp.status !== 200) continue;
 
-                            const { votes } = await resp.json();
+                            const { votes } = resp.data;
                             if (Array.isArray(votes) && votes.length > 0) {
-                                console.log(`[Wallet] Downloaded ${votes.length} votes from ${rNode.url}`);
+                                console.log(`[Wallet] Downloaded ${votes.length} votes from ${rNode.url} `);
                                 const importedFilenames: string[] = [];
                                 for (const v of votes) {
                                     const fname = `imported_vote_${Date.now()}_${Math.random().toString(36).substring(7)}.json`;
@@ -407,11 +400,10 @@ export const setupWalletRoutes = (node: App) => {
                                     importedFilenames.push(v._filename);
                                 }
 
-                                await fetch(`${rNode.url}/admin/votes/delete`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json', 'X-Wara-Key': adminKey },
-                                    body: JSON.stringify({ filenames: importedFilenames })
-                                });
+                                await axios.post(`${rNode.url}/admin/votes/delete`,
+                                    { filenames: importedFilenames },
+                                    { headers: { 'X-Wara-Key': adminKey } }
+                                );
                             }
                         } catch (e) { console.warn(`Failed to sync votes from ${rNode.url}`, e); }
                     }

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { App } from '../App';
+import axios from 'axios';
 import * as fs from 'fs';
 import * as path from 'path';
 import { CONFIG } from '../config/config';
@@ -318,15 +319,15 @@ export const setupAdminRoutes = (node: App) => {
 
             console.log(`[App] Mirroring content from ${outputUrl}...`);
 
-            const mapRes = await fetch(`${outputUrl}/map`);
-            if (!mapRes.ok) throw new Error("Could not fetch remote map");
-            const map = await mapRes.json() as WaraMap;
+            const mapRes = await axios.get(`${outputUrl}/map`);
+            if (mapRes.status !== 200) throw new Error("Could not fetch remote map");
+            const map = mapRes.data as WaraMap;
 
             const streamUrl = `${outputUrl}/stream`;
-            const response = await fetch(streamUrl);
-            if (!response.ok || !response.body) throw new Error("Could not fetch remote stream");
+            const response = await axios.get(streamUrl, { responseType: 'arraybuffer' });
+            if (response.status !== 200 || !response.data) throw new Error("Could not fetch remote stream");
 
-            const arrayBuffer = await response.arrayBuffer();
+            const arrayBuffer = response.data;
             const buffer = Buffer.from(arrayBuffer);
 
             const localPath = path.join(CONFIG.DATA_DIR, `${map.id}.wara`);

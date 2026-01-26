@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { ethers } from 'ethers';
+import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
@@ -55,11 +56,11 @@ export async function getMediaMetadata(prisma: PrismaClient, sourceId: string, t
                 console.log(`[P2P] Neighborhood Discovery: Searching ${targets.length} peers for ${waraId}...`);
 
                 const results = await Promise.allSettled(targets.map(async (peer) => {
-                    const res = await fetch(`${peer.endpoint}/api/media/stream/${waraId}`, {
-                        signal: (AbortSignal as any).timeout ? (AbortSignal as any).timeout(3000) : undefined
+                    const res = await axios.get(`${peer.endpoint}/api/media/stream/${waraId}`, {
+                        timeout: 3000
                     });
-                    if (res.ok) {
-                        const p2m = await res.json();
+                    if (res.status === 200) {
+                        const p2m = res.data;
                         if (p2m && p2m.overview) return p2m;
                     }
                     throw new Error("Peer lacks manifest");
@@ -127,10 +128,10 @@ export async function getMediaMetadata(prisma: PrismaClient, sourceId: string, t
             return existing;
         }
 
-        const res = await fetch(`${TMDB_BASE_URL}/${type}/${sourceId}?api_key=${process.env.TMDB_API_KEY}&append_to_response=credits,videos,similar`);
-        if (!res.ok) return null;
+        const res = await axios.get(`${TMDB_BASE_URL}/${type}/${sourceId}?api_key=${process.env.TMDB_API_KEY}&append_to_response=credits,videos,similar`);
+        if (res.status !== 200) return null;
 
-        const data = await res.json();
+        const data = res.data;
 
         // Download Images
         const dataDir = path.join(process.cwd(), 'wara_store');
@@ -210,9 +211,9 @@ export async function getMediaMetadata(prisma: PrismaClient, sourceId: string, t
 export async function getSeasonDetails(prisma: PrismaClient, sourceId: string, seasonNumber: number) {
     if (!process.env.TMDB_API_KEY) return null;
     try {
-        const res = await fetch(`${TMDB_BASE_URL}/tv/${sourceId}/season/${seasonNumber}?api_key=${process.env.TMDB_API_KEY}`);
-        if (!res.ok) return null;
-        const data = await res.json();
+        const res = await axios.get(`${TMDB_BASE_URL}/tv/${sourceId}/season/${seasonNumber}?api_key=${process.env.TMDB_API_KEY}`);
+        if (res.status !== 200) return null;
+        const data = res.data;
         return data;
     } catch (e) {
         console.error("[TMDB] Season Fetch error:", e);
@@ -223,9 +224,9 @@ export async function getSeasonDetails(prisma: PrismaClient, sourceId: string, s
 export async function searchTMDB(query: string) {
     if (!process.env.TMDB_API_KEY) return [];
     try {
-        const res = await fetch(`${TMDB_BASE_URL}/search/multi?api_key=${process.env.TMDB_API_KEY}&query=${encodeURIComponent(query)}`);
-        if (!res.ok) return [];
-        const data = await res.json();
+        const res = await axios.get(`${TMDB_BASE_URL}/search/multi?api_key=${process.env.TMDB_API_KEY}&query=${encodeURIComponent(query)}`);
+        if (res.status !== 200) return [];
+        const data = res.data;
 
         return data.results
             .filter((d: any) => d.media_type === 'movie' || d.media_type === 'tv')

@@ -1,10 +1,12 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import axios from 'axios';
 import { ethers } from 'ethers';
 import { CONFIG } from '../config/config';
 import { IdentityService } from './IdentityService';
 import { BlockchainService } from './BlockchainService';
 import { WaraPeer } from '../types';
+import { getMediaMetadata } from '../utils/tmdb';
 
 export class P2PService {
     public knownPeers: Map<string, WaraPeer> = new Map();
@@ -97,21 +99,19 @@ export class P2PService {
 
             // 1. Catalog Sync with random peers
             const peers = Array.from(this.knownPeers.values()).sort(() => 0.5 - Math.random()).slice(0, 5);
-            // @ts-ignore
-            const fetch = (await import('node-fetch')).default as any;
-            const { getMediaMetadata } = await import('../utils/tmdb');
+
 
             for (const peer of peers) {
                 if (peer.name === this.identityService.nodeName) continue;
 
                 try {
                     console.log(`[P2P] Syncing catalog with ${peer.name}...`);
-                    const res = await fetch(`${peer.endpoint}/api/catalog`, { signal: AbortSignal.timeout(5000) });
-                    if (!res.ok) continue;
+                    const res = await axios.get(`${peer.endpoint}/api/catalog`, { timeout: 5000 });
+                    if (res.status !== 200) continue;
 
-                    const catalog: any[] = await res.json();
+                    const catalog: any[] = res.data;
                     for (const item of catalog) {
-                        await this.processSyncedItem(item, peer, fetch, getMediaMetadata);
+                        await this.processSyncedItem(item, peer, getMediaMetadata);
                     }
                 } catch (e) { }
             }
@@ -124,7 +124,7 @@ export class P2PService {
         }
     }
 
-    private async processSyncedItem(item: any, peer: WaraPeer, fetch: any, getMediaMetadata: any) {
+    private async processSyncedItem(item: any, peer: WaraPeer, getMediaMetadata: any) {
         if (!this.prisma) return;
         const source = item.source || 'tmdb';
         const sourceId = item.sourceId;
@@ -137,9 +137,9 @@ export class P2PService {
         // Sovereign Metadata Sync
         if (!media && item.waraId) {
             try {
-                const mediaRes = await fetch(`${peer.endpoint}/api/media/stream/${item.waraId}`, { signal: AbortSignal.timeout(3000) });
-                if (mediaRes.ok) {
-                    const remoteMedia = await mediaRes.json();
+                const mediaRes = await axios.get(`${peer.endpoint}/api/media/stream/${item.waraId}`, { timeout: 3000 });
+                if (mediaRes.status === 200) {
+                    const remoteMedia = mediaRes.data;
                     media = await this.prisma.media.upsert({
                         where: { waraId: remoteMedia.waraId },
                         update: { ...remoteMedia },
@@ -152,10 +152,13 @@ export class P2PService {
                     if (!fs.existsSync(postersDest)) {
                         try {
                             if (!fs.existsSync(postersDir)) fs.mkdirSync(postersDir, { recursive: true });
-                            const imgRes = await fetch(`${peer.endpoint}/api/catalog/poster/${sourceId}`, { signal: AbortSignal.timeout(5000) });
-                            if (imgRes.ok) {
+                            const imgRes = await axios.get(`${peer.endpoint}/api/catalog/poster/${sourceId}`, {
+                                timeout: 5000,
+                                responseType: 'stream'
+                            });
+                            if (imgRes.status === 200) {
                                 const dest = fs.createWriteStream(postersDest);
-                                imgRes.body.pipe(dest);
+                                imgRes.data.pipe(dest);
                             }
                         } catch (e) { }
                     }
@@ -231,13 +234,11 @@ export class P2PService {
     }
 
     private async discoverFromTrackers() {
-        // @ts-ignore
-        const fetch = (await import('node-fetch')).default;
         for (const tracker of this.trackers) {
             try {
-                const res = await fetch(`${tracker}/api/network/peers`);
-                if (res.ok) {
-                    const data: any = await res.json();
+                const res = await axios.get(`${tracker}/api/network/peers`);
+                if (res.status === 200) {
+                    const data: any = res.data;
                     const peers: WaraPeer[] = Array.isArray(data) ? data : data.peers || [];
 
                     for (const p of peers) {
@@ -303,8 +304,6 @@ export class P2PService {
         // HTTP Announce to Trackers
         this.heartbeatInterval = setInterval(async () => {
             if (this.trackers.length === 0) return;
-            // @ts-ignore
-            const fetch = (await import('node-fetch')).default;
 
             // NOTE: In full implementation, we'd inject stats from other services here
             const payload = {
@@ -315,11 +314,7 @@ export class P2PService {
 
             for (const t of this.trackers) {
                 try {
-                    await fetch(`${t}/announce`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(payload)
-                    });
+                    await axios.post(`${t}/announce`, payload);
                 } catch (e) { }
             }
         }, 30000);
@@ -334,15 +329,9 @@ export class P2PService {
             const targets = peers.sort(() => 0.5 - Math.random()).slice(0, 3);
             const myPayload = await this.buildGossipPayload(peers);
 
-            // @ts-ignore
-            const fetch = (await import('node-fetch')).default;
             for (const target of targets) {
                 try {
-                    await fetch(`${target.endpoint}/api/network/gossip`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(myPayload)
-                    });
+                    await axios.post(`${target.endpoint}/api/network/gossip`, myPayload);
                 } catch (e) { }
             }
         }, 60000);

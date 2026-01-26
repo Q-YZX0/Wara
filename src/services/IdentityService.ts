@@ -241,11 +241,8 @@ export class IdentityService {
 
                 // If publicIp is not set via UPnP/Env, fetch it
                 if (!currentIP) {
-                    // @ts-ignore
-                    const fetch = (await import('node-fetch')).default as any;
-                    const res = await fetch('https://api.ipify.org?format=json');
-                    const json: any = await res.json();
-                    currentIP = json.ip;
+                    const res = await axios.get('https://api.ipify.org?format=json');
+                    currentIP = res.data.ip;
                 }
 
                 if (!currentIP) throw new Error("Could not determine public IP");

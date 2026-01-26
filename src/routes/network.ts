@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import axios from 'axios';
 import { App } from '../App';
 import { CONFIG } from '../config/config';
 
@@ -89,10 +90,8 @@ export const setupNetworkRoutes = (node: App) => {
             endpoint = target;
             console.log(`[Network] Target detected as URL: ${endpoint}. Finding name...`);
             try {
-                // @ts-ignore
-                const fetch = (await import('node-fetch')).default as any;
-                const resPeers = await fetch(`${endpoint}/api/network/peers`).then((r: any) => r.json());
-                const self = Array.isArray(resPeers) ? resPeers.find((p: any) => p.endpoint && (p.endpoint.includes(endpoint!) || endpoint!.includes(p.endpoint))) : null;
+                const resPeers = await axios.get(`${endpoint}/api/network/peers`);
+                const self = Array.isArray(resPeers.data) ? resPeers.data.find((p: any) => p.endpoint && (p.endpoint.includes(endpoint!) || endpoint!.includes(p.endpoint))) : null;
                 if (self && self.name) {
                     name = self.name;
                     console.log(`[Network] Discovered name: ${name}`);
