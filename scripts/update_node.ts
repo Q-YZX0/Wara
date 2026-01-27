@@ -7,7 +7,7 @@ import axios from 'axios';
 
 // --- CONFIGURATION ---
 // CHANGE THIS TO YOUR REPO ZIP URL
-const UPDATE_URL = "https://github.com/YZX0/Wara";
+const UPDATE_URL = "https://github.com/YZX0/Wara/raw/main/releases/update.zip";
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const SRC_DIR = path.join(ROOT_DIR, 'src');

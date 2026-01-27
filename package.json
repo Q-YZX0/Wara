@@ -1,6 +1,6 @@
 {
     "name": "wara-node",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "description": "Wara Links Library",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -9,7 +9,8 @@
         "test": "ts-node test-wara.ts",
         "start": "npx prisma db push && npx ts-node src/index.ts",
         "bundle": "npm run build && pkg dist/index.js --targets node18-win-x64 --output wara-node.exe",
-        "update": "ts-node scripts/update_node.ts"
+        "update": "ts-node scripts/update_node.ts",
+        "zip": "ts-node scripts/create_zip.ts"
     },
     "keywords": [],
     "author": "YZX0",
