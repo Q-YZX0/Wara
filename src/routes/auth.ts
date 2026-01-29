@@ -1,6 +1,5 @@
 import { Router, Request, Response } from 'express';
 import { App } from '../App';
-import { getMediaMetadata, searchTMDB, getSeasonDetails } from '../utils/tmdb';
 import { ethers } from 'ethers';
 import { decryptPayload, verifyPassword, decryptPrivateKey, encryptPayload } from '../utils/encryption';
 import { randomUUID } from 'crypto';

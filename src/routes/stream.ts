@@ -15,9 +15,14 @@ export const setupStreamRoutes = (node: App) => {
         const viewerIp = req.socket.remoteAddress || '0.0.0.0';
 
         try {
-            const { ethers } = await import('ethers');
+            // 1. Check if user is Local Owner or Localhost
+            const isLocal = viewerIp === '::1' || viewerIp === '127.0.0.1' || viewerIp === '::ffff:127.0.0.1';
+            console.log(`[StreamAuth] Check IP: ${viewerIp}, Local: ${isLocal}`);
 
-            // 1. Check if user is Local Owner
+            if (isLocal) {
+                return res.json({ status: 'play', reason: 'local' });
+            }
+
             if (wallet && typeof wallet === 'string') {
                 const localProfile = await node.prisma.localProfile.findUnique({
                     where: { walletAddress: wallet }
@@ -125,7 +130,7 @@ export const setupStreamRoutes = (node: App) => {
         }
     });
     //GET /stream/:id/map
-    router.get('/map', (req: Request, res: Response) => {
+    router.get('/:id/map', (req: Request, res: Response) => {
         const link = node.catalog.getLink(req.params.id);
         if (!link) return res.status(404).json({ error: 'Link not found' });
 
@@ -308,7 +313,6 @@ export const setupStreamRoutes = (node: App) => {
             const s = season ? parseInt(season as string) : 0;
             const e = episode ? parseInt(episode as string) : 0;
 
-            const { ethers } = await import('ethers');
             const itemWaraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
 
             const progress = await node.prisma.playbackProgress.findUnique({
@@ -336,7 +340,6 @@ export const setupStreamRoutes = (node: App) => {
             const s = season ? parseInt(season) : 0;
             const e = episode ? parseInt(episode) : 0;
 
-            const { ethers } = await import('ethers');
             const itemWaraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
 
             await node.prisma.playbackProgress.upsert({
@@ -380,18 +383,16 @@ export const setupStreamRoutes = (node: App) => {
         }
 
         try {
-            const { ethers } = await import('ethers');
 
             // 1. Calculate Standard Hex ID (Allow Pass-through of 0x... IDs)
             const urlLinkIdHash = linkId.startsWith('0x') ? linkId : ethers.id(linkId);
 
             // 2. Resolve Official Uploader from Blockchain
-            const reputationContract = new ethers.Contract(CONFIG.CONTRACTS.LINK_REGISTRY, ABIS.LINK_REGISTRY, node.blockchain.provider);
             let officialUploader: string = "";
 
             try {
                 // Try verifying against the ID we have
-                const stats = await reputationContract.getLinkStats(urlLinkIdHash);
+                const stats = await node.blockchain.linkRegistry!.getLinkStats(urlLinkIdHash);
                 officialUploader = stats.hoster;
             } catch (e) { }
 
@@ -462,7 +463,6 @@ export const setupStreamRoutes = (node: App) => {
         }
 
         try {
-            const { ethers } = await import('ethers');
 
             // 1. Resolve hoster
             const urlLinkIdHash = linkId.startsWith('0x') ? linkId : ethers.id(linkId);
@@ -470,9 +470,8 @@ export const setupStreamRoutes = (node: App) => {
 
             let officialHoster = hoster;
             if (!officialHoster) {
-                const reputationContract = new ethers.Contract(CONFIG.CONTRACTS.LINK_REGISTRY, ABIS.LINK_REGISTRY, node.blockchain.provider);
                 try {
-                    const stats = await reputationContract.getLinkStats(urlLinkIdHash);
+                    const stats = await node.blockchain.linkRegistry!.getLinkStats(urlLinkIdHash);
                     officialHoster = stats.hoster;
                 } catch (e) { }
             }

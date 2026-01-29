@@ -5,17 +5,18 @@ import { CONFIG } from '../config/config';
 
 export const setupNetworkRoutes = (node: App) => {
     const router = Router();
-    // GET /identity (Expose technical wallet for voting rewards)
+    // GET /identity (Expose technical wallet)
     router.get('/identity', (req: Request, res: Response) => {
         if (!node.identity.nodeSigner) return res.status(500).json({ error: 'Node identity not initialized' });
         res.json({
             nodeAddress: node.identity.nodeSigner.address,
             nodeName: node.identity.nodeName || null,
             publicIp: node.identity.publicIp || null
+            //agregar la ip privada en el futuro
         });
     });
 
-    // --- Gossip / Discovery (Phonebook) ---
+    // --- Gossip / Peerlist(share endpoint) (Phonebook) ---
     router.get('/peers', async (req: Request, res: Response) => {
         // Return my own info + everyone I know
         const peers = Array.from(node.p2p.knownPeers.entries()).map(([name, data]) => ({
@@ -43,7 +44,7 @@ export const setupNetworkRoutes = (node: App) => {
         res.json(peers);
     });
 
-    // Receive gossip from others
+    // Gossip / Peerlist(Receive endpoint) (Phonebook) ---
     router.post('/gossip', (req: Request, res: Response) => {
         const { peers } = req.body; // Array of {name, endpoint}
         if (Array.isArray(peers)) {
@@ -73,9 +74,9 @@ export const setupNetworkRoutes = (node: App) => {
         res.json({ success: true });
     });
 
-    // POST /api/network/connect - Manual Sentinel Connection (Unified)
+    // POST /api/network/connect - Manual Connection to Peer (Unified)
     router.post('/connect', async (req: Request, res: Response) => {
-        const { target } = req.body; // Can be "salsa.muggi" or "http://IP:PORT"
+        const { target } = req.body; // Can be "muggi.wara" or "http://IP:PORT"
 
         if (!target) return res.status(400).json({ error: 'Target required (name or url)' });
 
@@ -90,7 +91,7 @@ export const setupNetworkRoutes = (node: App) => {
             endpoint = target;
             console.log(`[Network] Target detected as URL: ${endpoint}. Finding name...`);
             try {
-                const resPeers = await axios.get(`${endpoint}/api/network/peers`);
+                const resPeers = await axios.get(`${endpoint}/api/network/peers`); //esto deberia usar el servicio interno porque consultar otra vez la api?
                 const self = Array.isArray(resPeers.data) ? resPeers.data.find((p: any) => p.endpoint && (p.endpoint.includes(endpoint!) || endpoint!.includes(p.endpoint))) : null;
                 if (self && self.name) {
                     name = self.name;
@@ -128,10 +129,27 @@ export const setupNetworkRoutes = (node: App) => {
         }
     });
 
+    // POST /api/network/sync
+    router.post('/sync', node.identity.requireAuth, async (req: Request, res: Response) => {
+        node.p2p.syncNetwork();
+        res.json({ success: true, message: 'Sync started' });
+    });
+
+    // POST /api/network/peer
+    // Add a new peer to the network manually
+    router.post('/peer', node.identity.requireAuth, (req: Request, res: Response) => {
+        const { name, endpoint } = req.body;
+        if (!name || !endpoint) return res.status(400).json({ error: 'Name and endpoint are required' });
+
+        node.p2p.knownPeers.set(name, { name, endpoint, lastSeen: Date.now() });
+        console.log(`[Admin] Manually added peer: ${name} (${endpoint})`);
+        res.json({ success: true, message: `Peer "${name}" added successfully`, totalPeers: node.p2p.knownPeers.size });
+    });
     // ==========================================
     // COMMUNITY RPC PROXY (Collaborative Infrastructure)
     // ==========================================
 
+    //esto debe mejorarse para usar un solo servicio no tener 2 endpoints para eso
     // POST /rpc-proxy (Handle JSON-RPC requests from fellow nodes)
     router.post('/rpc-proxy', async (req: Request, res: Response) => {
         // Simple Guard: No userSigner? No Proxy.

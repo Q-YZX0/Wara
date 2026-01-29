@@ -24,6 +24,8 @@ export class AdService {
     private isSyncing: boolean = false;
     private lastSyncedBlock: number = 0;
 
+    private initTimeouts: NodeJS.Timeout[] = [];
+
     constructor(
         private blockchainService: BlockchainService,
         private identityService: IdentityService,
@@ -53,17 +55,17 @@ export class AdService {
         this.pollInterval = setInterval(() => this.pollBlockchain(), 2 * 60 * 60 * 1000); // 2 Hours
         this.gcInterval = setInterval(() => this.runGarbageCollection(), GC_INTERVAL_MS);
 
-        // Initial Run (Delayed)
-        setTimeout(() => this.pollBlockchain(), 5000);
-        setTimeout(() => this.runGarbageCollection(), 60000);
-
-        // Initial Replicate Check (Reverse)
-        setTimeout(() => this.replicateExistingAds(), 10000);
+        // Initial Run (Delayed) - Tracked for cleanup
+        this.initTimeouts.push(setTimeout(() => this.pollBlockchain(), 5000));
+        this.initTimeouts.push(setTimeout(() => this.runGarbageCollection(), 60000));
+        this.initTimeouts.push(setTimeout(() => this.replicateExistingAds(), 10000));
     }
 
     public stop() {
         if (this.pollInterval) clearInterval(this.pollInterval);
         if (this.gcInterval) clearInterval(this.gcInterval);
+        this.initTimeouts.forEach(t => clearTimeout(t));
+        this.initTimeouts = [];
     }
 
     // --- REPLICATION LOGIC ---

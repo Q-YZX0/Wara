@@ -102,7 +102,6 @@ model Media {
   source      String   @default("tmdb")
   sourceId    String   
   
-  imdbId      String?
   type        String   // 'movie' | 'tv'
   title       String
   genre       String?

@@ -16,6 +16,11 @@ export const setupRegistryRoutes = (node: App) => {
 
         if (!name) return res.status(400).json({ error: 'Missing name' });
 
+        // VALIDATION: Prevent registration if the node already has a name (locked)
+        if (node.identity.nodeName) {
+            return res.status(403).json({ error: `Node is already registered as ${node.identity.nodeName}` });
+        }
+
         try {
             // 1. Authorization: Valid Session Token ONLY
             // The User IS the Owner. Simple.

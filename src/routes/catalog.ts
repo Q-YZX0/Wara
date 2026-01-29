@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { App } from '../App';
 import { CONFIG } from '../config/config';
-import { getMediaMetadata, searchTMDB, getSeasonDetails } from '../utils/tmdb';
+import { MetaService } from '../services/MetaService';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -187,7 +187,7 @@ export const setupCatalogRoutes = (node: App) => {
             let results: any[] = [];
             if (process.env.TMDB_API_KEY) {
                 try {
-                    results = await searchTMDB(q);
+                    results = await MetaService.search(q);
                 } catch (e) { console.error("TMDB Search Error", e); }
             }
 
@@ -364,7 +364,7 @@ export const setupCatalogRoutes = (node: App) => {
 
                 // Fetch Metadata locally first to have the data ready for registration
                 // We default to 'pending_dao' since we don't know the status yet if not on chain
-                const media = await getMediaMetadata(node.prisma, String(finalSourceId), String(type), 'pending_dao', node, String(source));
+                const media = await MetaService.getMediaMetadata(node.prisma, String(finalSourceId), String(type), 'pending_dao', node, String(source));
 
                 if (!onChain && media) {
                     // 1.1 Universal Request Registration (Proposal)
@@ -413,12 +413,12 @@ export const setupCatalogRoutes = (node: App) => {
 
     router.get('/meta/:id', async (req: Request, res: Response) => {
         const type = (req.query.type as string) || 'movie';
-        const data = await getMediaMetadata(node.prisma, req.params.id, type, 'approved', node);
+        const data = await MetaService.getMediaMetadata(node.prisma, req.params.id, type, 'approved', node);
         res.json(data || {});
     });
 
     router.get('/meta/:id/season/:season', async (req: Request, res: Response) => {
-        const data = await getSeasonDetails(node.prisma, req.params.id, Number(req.params.season));
+        const data = await MetaService.getSeasonDetails(req.params.id, Number(req.params.season));
         res.json(data || {});
     });
 

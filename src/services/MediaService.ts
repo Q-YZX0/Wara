@@ -4,6 +4,7 @@ import { ethers } from 'ethers';
 import { CONFIG, ABIS } from '../config/config';
 import { BlockchainService } from './BlockchainService';
 import { IdentityService } from './IdentityService';
+import { MetaService } from './MetaService';
 
 export class MediaService {
     private prisma: any;
@@ -13,14 +14,16 @@ export class MediaService {
     private lastSyncedBlock: number = 0;
     private isChainSyncing: boolean = false;
     private lastSyncPath: string = '';
+    private node: any;
 
     constructor(
         private blockchainService: BlockchainService,
         private identityService: IdentityService
     ) { }
 
-    public init(prisma: any) {
+    public init(prisma: any, node?: any) {
         this.prisma = prisma;
+        this.node = node;
         this.lastSyncPath = path.join(CONFIG.DATA_DIR, 'sync_state.json');
 
         this.startSentinelCron();
@@ -82,43 +85,18 @@ export class MediaService {
 
                 if (pendingProposals.length === 0) return;
 
-                const OWNER_PK = process.env.OWNER_PRIVATE_KEY;
-                if (!OWNER_PK) return;
-
-                const executorWallet = new ethers.Wallet(OWNER_PK, this.blockchainService.provider);
-                const registryWrite = new ethers.Contract(CONFIG.CONTRACTS.MEDIA_REGISTRY, ABIS.MEDIA_REGISTRY, executorWallet);
-
+                // NOTE: Resolution of proposals should happen on-chain via resolveProposal.
+                // The automated job below is for local state maintenance.
                 for (const proposal of pendingProposals) {
                     const margin = proposal.upvotes - proposal.downvotes;
 
                     if (margin > 0) {
-                        try {
-                            // Check if already on chain
-                            const [exists] = await registryWrite.exists(proposal.source, proposal.sourceId);
-                            if (!exists) {
-                                const voters = proposal.votes.map((v: any) => v.voterWallet);
-                                const votes = proposal.votes.map((v: any) => v.value);
-                                const signatures = proposal.votes.map((v: any) => v.signature);
-
-                                const tx = await registryWrite.registerDAO(
-                                    proposal.source,
-                                    proposal.sourceId,
-                                    proposal.title,
-                                    proposal.waraId,
-                                    voters,
-                                    votes,
-                                    signatures
-                                );
-                                await tx.wait();
-                            }
-
-                            await this.prisma.media.update({
-                                where: { waraId: proposal.waraId },
-                                data: { status: 'approved' }
-                            });
-                        } catch (e) {
-                            console.warn('[Media] Failed to process proposal:', proposal.waraId, e);
-                        }
+                        // If it's old and has positive margin, we consider it 'approved' locally 
+                        // to show it in the UI, while waiting for the on-chain resolution transaction.
+                        await this.prisma.media.update({
+                            where: { waraId: proposal.waraId },
+                            data: { status: 'approved' }
+                        });
                     } else {
                         await this.prisma.media.update({
                             where: { waraId: proposal.waraId },
@@ -129,7 +107,7 @@ export class MediaService {
                     }
                 }
             } catch (e) {
-                console.error('[Media] Blockchain sync error:', e);
+                console.error('[Media] Governance local update error:', e);
             }
         }, 60 * 60 * 1000); // 1 hour
     }
@@ -161,24 +139,153 @@ export class MediaService {
                 const events = await this.blockchainService.mediaRegistry!.queryFilter(filter, fromBlock, toBlock);
 
                 if (events.length > 0) {
-                    console.log(`[ChainSync] Found ${events.length} registrations.`);
-                    const { getMediaMetadata } = await import('../utils/tmdb');
-
                     for (const event of events) {
                         try {
                             const anyEvent = event as any;
                             if (!anyEvent.args) continue;
-                            const [source, externalId] = anyEvent.args;
-                            console.log(`[ChainSync] New content detected: ${externalId} (${source})`);
-                            // Background enrichment
-                            getMediaMetadata(this.prisma, externalId, 'movie').catch(() => { });
+                            const [mediaId, source, externalId, title] = anyEvent.args;
+
+                            // PROGRESSIVE ENHANCEMENT STRATEGY (2-Phase Sync)
+                            // PHASE 1: Create skeleton from blockchain event (guaranteed data)
+                            // This ensures the content exists in DB immediately, even if enrichment fails
+                            await this.prisma.media.upsert({
+                                where: { waraId: mediaId },
+                                update: { title: title }, // At least update title if it changed
+                                create: {
+                                    waraId: mediaId,
+                                    source: source,
+                                    sourceId: externalId,
+                                    title: title,
+                                    type: 'movie', // Default
+                                    status: 'approved'
+                                }
+                            });
+
+                            // PHASE 2: Enrich with P2P/TMDB metadata (best effort, background)
+                            // If this fails, we still have the skeleton and can retry on next sync
+                            MetaService.getMediaMetadata(this.prisma, externalId, 'movie', 'approved', this.node, source).catch(() => { });
                         } catch (e) {
-                            console.warn('[Media] Failed to download sovereign metadata:', e);
+                            console.warn(`[ChainSync] Media register error:`, e);
                         }
                     }
                 }
 
+                // 1.1 "PROPOSALS": Sync Pending DAO content
+                const proposalFilter = this.blockchainService.mediaRegistry!.filters.ProposalCreated();
+                const proposalEvents = await this.blockchainService.mediaRegistry!.queryFilter(proposalFilter, fromBlock, toBlock);
+
+                for (const event of proposalEvents) {
+                    try {
+                        const [mediaId, source, externalId, title, deadline] = (event as any).args;
+
+                        // PROGRESSIVE ENHANCEMENT STRATEGY (2-Phase Sync)
+                        // PHASE 1: Create skeleton from blockchain event (guaranteed data)
+                        // This ensures proposed content exists in DB immediately for DAO voting
+                        await this.prisma.media.upsert({
+                            where: { waraId: mediaId },
+                            update: { title: title },
+                            create: {
+                                waraId: mediaId,
+                                title: title,
+                                source: source,
+                                sourceId: externalId,
+                                type: 'movie',
+                                status: 'pending_dao',
+                                createdAt: new Date()
+                            }
+                        });
+
+                        // PHASE 2: Enrich with P2P/TMDB metadata (best effort, background)
+                        // If this fails, we still have the skeleton and can retry on next sync
+                        MetaService.getMediaMetadata(this.prisma, externalId, 'movie', 'pending_dao', this.node, source).catch(() => { });
+
+                    } catch (e) { }
+                }
+
+                // 1.2 "VOTES": Sync community votes
+                const votedFilter = this.blockchainService.mediaRegistry!.filters.Voted();
+                const votedEvents = await this.blockchainService.mediaRegistry!.queryFilter(votedFilter, fromBlock, toBlock);
+
+                for (const event of votedEvents) {
+                    try {
+                        const [mediaId, voter, side] = (event as any).args;
+                        const value = Number(side); // 1 or -1
+
+                        await this.prisma.media.update({
+                            where: { waraId: mediaId },
+                            data: {
+                                upvotes: value > 0 ? { increment: 1 } : undefined,
+                                downvotes: value < 0 ? { increment: 1 } : undefined
+                            }
+                        }).catch(() => { }); // Media might not be in DB yet
+                    } catch (e) { }
+                }
+
+                // 1.3 "EXECUTION": Resolve proposals
+                const executedFilter = this.blockchainService.mediaRegistry!.filters.ProposalExecuted();
+                const executedEvents = await this.blockchainService.mediaRegistry!.queryFilter(executedFilter, fromBlock, toBlock);
+
+                for (const event of executedEvents) {
+                    try {
+                        const [mediaId, approved] = (event as any).args;
+                        await this.prisma.media.update({
+                            where: { waraId: mediaId },
+                            data: { status: approved ? 'approved' : 'rejected' }
+                        }).catch(() => { });
+                    } catch (e) { }
+                }
+
                 this.lastSyncedBlock = toBlock;
+
+                // 2. Poll for New Links (Global Discovery)
+                if (this.blockchainService.linkRegistry) {
+                    console.log(`[ChainSync] Polling for Link Events: ${fromBlock} -> ${toBlock}`);
+                    const linkFilter = this.blockchainService.linkRegistry!.filters.LinkRegistered();
+                    const linkEvents = await this.blockchainService.linkRegistry!.queryFilter(linkFilter, fromBlock, toBlock);
+
+                    for (const event of linkEvents) {
+                        try {
+                            const anyEvent = event as any;
+                            if (!anyEvent.args) continue;
+                            const [linkId, contentHash, mediaHash, hoster, salt] = anyEvent.args;
+
+                            // Find media metadata record
+                            const media = await this.prisma.media.findUnique({ where: { waraId: mediaHash } });
+                            if (!media) {
+                                // If we don't have media info yet, we skip this link for now 
+                                // (It will be findable once Media syncs and we search again)
+                                continue;
+                            }
+
+                            // Create or update remote link record
+                            await this.prisma.link.upsert({
+                                where: { id: linkId },
+                                update: {
+                                    url: hoster.toLowerCase(), // In P2P links, URL is the hoster wallet address
+                                    status: 'active'
+                                },
+                                create: {
+                                    id: linkId,
+                                    waraId: mediaHash,
+                                    source: media.source,
+                                    sourceId: media.sourceId,
+                                    mediaType: media.type,
+                                    title: media.title,
+                                    url: hoster.toLowerCase(),
+                                    uploaderWallet: hoster.toLowerCase(),
+                                    waraMetadata: JSON.stringify({
+                                        hash: contentHash,
+                                        salt: salt,
+                                        origin: 'blockchain_sync'
+                                    })
+                                }
+                            });
+                        } catch (e) {
+                            // Link sync error
+                        }
+                    }
+                }
+
                 fs.writeFileSync(this.lastSyncPath, JSON.stringify({ lastSyncedBlock: this.lastSyncedBlock }));
             } catch (e: any) {
                 if (!e.message.includes('resource not found')) {
@@ -187,7 +294,7 @@ export class MediaService {
             }
         };
 
-        // Every 6 hours as per legacy
+        // Every 6 hours as per original design
         setInterval(poll, 6 * 60 * 60 * 1000);
         poll();
         this.isChainSyncing = false;

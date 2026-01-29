@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Router } from 'express';
 import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
 import { CONFIG } from './config/config';
@@ -13,13 +13,12 @@ import { OracleService } from './services/OracleService';
 // Route imports (to be refactored)
 import { MediaService } from './services/MediaService';
 import { setupAuthRoutes } from './routes/auth';
-import { setupAdminRoutes } from './routes/admin';
 import { setupNetworkRoutes } from './routes/network';
 import { setupCatalogRoutes } from './routes/catalog';
 import { setupLinkRoutes } from './routes/link';
 import { setupStreamRoutes } from './routes/stream';
 import { setupRegistryRoutes } from './routes/registry';
-import { setupRemoteRoutes } from './routes/remote';
+
 import { setupLeaderboardRoutes } from './routes/leaderboard';
 import { setupOracleRoutes } from './routes/oracle';
 import { setupWalletRoutes } from './routes/wallet';
@@ -27,6 +26,13 @@ import { setupMediaRoutes } from './routes/media';
 import { setupSubscriptionRoutes } from './routes/subscription';
 import { setupAirdropRoutes } from './routes/airdrop';
 import { setupDaoRoutes } from './routes/dao';
+import { setupAdsRoutes } from './routes/ads';
+import { setupStorageRoutes } from './routes/manager/storage';
+import { setupUploadRoutes } from './routes/manager/upload';
+import { setupMirrorRoutes } from './routes/manager/mirror';
+import { setupTrackersRoutes } from './routes/manager/trackers';
+import { setupProofsRoutes } from './routes/manager/proofs';
+import { setupNodesRoutes } from './routes/manager/nodes';
 import { ethers } from 'ethers';
 
 export class App {
@@ -118,14 +124,14 @@ export class App {
         return (this.p2p as any).resolveSentinelNode?.(name);
     }
 
-    // Discovery Methods (for admin.ts)
-    get heartbeatInterval() { return this.p2p.heartbeatInterval; }
-    set heartbeatInterval(val: any) { this.p2p.heartbeatInterval = val; }
+    // Discovery Methods
+    get trackerbeatInterval() { return this.p2p.trackerbeatInterval; }
+    set trackerbeatInterval(val: any) { this.p2p.trackerbeatInterval = val; }
     get gossipInterval() { return this.p2p.gossipInterval; }
     set gossipInterval(val: any) { this.p2p.gossipInterval = val; }
 
-    public startHeartbeat() { return this.p2p.startHeartbeat(); }
-    public startGossip() { return (this.p2p as any).startGossip?.(); }
+    public startTrackerbeat() { return this.p2p.startTrackerbeat(); }
+    public startGossip() { return this.p2p.startGossip(); }
 
     constructor() {
         this.app = express();
@@ -157,12 +163,16 @@ export class App {
         await this.p2p.init();
         await this.catalog.init();
         this.ads.init();
-        this.media.init(this.prisma);
+        this.media.init(this.prisma, this as any);
         await this.oracle.start();
 
         // 3. Setup Express
         this.setupExpress();
         this.setupRoutes();
+    }
+
+    public async start() {
+        await this.init();
 
         // 4. Start Server
         const port = Number(CONFIG.PORT);
@@ -204,7 +214,7 @@ export class App {
 
                 // Block sensitive paths from external IPs
                 // Allow: /api/catalog, /stream/ (public streaming)
-                const sensitivePaths = ['/api/auth/', '/api/wallet/', '/admin/', '/api/remote-nodes'];
+                const sensitivePaths = ['/api/auth/', '/api/wallet/', '/api/manager/'];
                 const isSensitive = sensitivePaths.some(p => req.path.startsWith(p));
 
                 if (isSensitive && !isLocal) {
@@ -217,7 +227,7 @@ export class App {
 
         // Log all requests for debugging (except status checks)
         this.app.use((req, res, next) => {
-            if (!req.url.startsWith('/admin/status')) {
+            if (!req.url.startsWith('/api/manager/status')) {
                 console.log(`[HTTP] ${req.method} ${req.url}`);
             }
             next();
@@ -234,13 +244,12 @@ export class App {
     private setupRoutes() {
         // Passing 'this' as the node instance to maintain compatibility with restored routes
         this.app.use('/api/auth', setupAuthRoutes(this as any));
-        this.app.use('/api/admin', setupAdminRoutes(this as any));
         this.app.use('/api/network', setupNetworkRoutes(this as any));
         this.app.use('/api/catalog', setupCatalogRoutes(this as any));
         this.app.use('/api/links', setupLinkRoutes(this as any));
         this.app.use('/api/stream', setupStreamRoutes(this as any));
         this.app.use('/api/registry', setupRegistryRoutes(this as any));
-        this.app.use('/api/remote', setupRemoteRoutes(this as any));
+
         this.app.use('/api/leaderboard', setupLeaderboardRoutes(this as any));
         this.app.use('/api/oracle', setupOracleRoutes(this as any));
         this.app.use('/api/wallet', setupWalletRoutes(this as any));
@@ -248,5 +257,16 @@ export class App {
         this.app.use('/api/subscription', setupSubscriptionRoutes(this as any));
         this.app.use('/api/airdrop', setupAirdropRoutes(this as any));
         this.app.use('/api/dao', setupDaoRoutes(this as any));
+        this.app.use('/api/ads', setupAdsRoutes(this as any));
+
+        // Manager Routes (Unified Modular Structure)
+        const managerRouter = Router();
+        managerRouter.use(setupStorageRoutes(this as any));
+        managerRouter.use(setupUploadRoutes(this as any));
+        managerRouter.use(setupMirrorRoutes(this as any));
+        managerRouter.use(setupTrackersRoutes(this as any));
+        managerRouter.use(setupProofsRoutes(this as any));
+        managerRouter.use(setupNodesRoutes(this as any));
+        this.app.use('/api/manager', managerRouter);
     }
 }

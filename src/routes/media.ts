@@ -1,9 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { App } from '../App';
 import { CONFIG } from '../config/config';
-import { getMediaMetadata } from '../utils/tmdb';
-import * as path from 'path';
-import * as fs from 'fs';
+import { MetaService } from '../services/MetaService';
 import { ethers } from 'ethers';
 
 export const setupMediaRoutes = (node: App) => {
@@ -74,8 +72,8 @@ export const setupMediaRoutes = (node: App) => {
             const statusTarget = isContractOwner ? 'approved' : 'pending_dao';
             console.log(`[Media] Fetching and materializing metadata for ${sourceId} (${statusTarget})...`);
 
-            // PASS SOURCE AND REQ.BODY (Extra Meta)
-            const media = await getMediaMetadata(node.prisma, String(sourceId), String(type), statusTarget, node, String(source), req.body);
+            // PASS SOURCE, REQ.BODY AND ONCHAIN STATUS
+            const media = await MetaService.getMediaMetadata(node.prisma, String(sourceId), String(type), statusTarget, node, String(source), req.body, onChain);
             if (!media) return res.status(404).json({ error: "Media not found in source" });
 
             // 2. Flow Decision

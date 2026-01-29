@@ -112,7 +112,10 @@ export const ABIS = {
         "function exists(string source, string externalId) external view returns (bool, bytes32)",
         "function computeMediaId(string source, string externalId) public pure returns (bytes32)",
         "function owner() external view returns (address)",
-        "event MediaRegistered(bytes32 indexed id, string source, string externalId, string title)"
+        "event MediaRegistered(bytes32 indexed id, string source, string externalId, string title)",
+        "event ProposalCreated(bytes32 indexed id, string source, string externalId, string title, uint256 deadline)",
+        "event Voted(bytes32 indexed id, address voter, int8 side)",
+        "event ProposalExecuted(bytes32 indexed id, bool approved)"
     ],
     AIRDROP: [
         "function register() external",

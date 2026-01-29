@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { ethers } from 'ethers';
 import { App } from '../App';
-import { CONFIG, ABIS } from '../config/config';
 
 export const setupSubscriptionRoutes = (node: App) => {
     const router = Router();
@@ -91,19 +90,16 @@ export const setupSubscriptionRoutes = (node: App) => {
 
             // Instantiate Contracts
             // 1. Token Contract (Write access needed for approve)
-            const tokenContract = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, ABIS.ERC20, connectedSigner);
+            const tokenContract = node.blockchain.token!.connect(connectedSigner) as ethers.Contract;
 
             // 2. Subscription Contract (Write access needed for subscribe)
             const subContract = node.blockchain.subscriptions!.connect(connectedSigner) as ethers.Contract;
-
-            // READ operation using the PROVIDER (safer for "call")
-            const readToken = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, ABIS.ERC20, node.blockchain.provider);
 
             console.log(`[Subscription] Checking price...`);
             const price = await readContract.getCurrentPrice();
 
             console.log(`[Subscription] Checking allowance...`);
-            const allowance = await readToken.allowance(connectedSigner.address, await node.blockchain.subscriptions!.getAddress());
+            const allowance = await node.blockchain.token!.allowance(connectedSigner.address, await node.blockchain.subscriptions!.getAddress());
 
             if (allowance < price) {
                 console.log(`[Subscription] Approving WARA...`);

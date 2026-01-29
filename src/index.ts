@@ -4,7 +4,7 @@ import { App } from './App';
 async function main() {
     try {
         const app = new App();
-        await app.init();
+        await app.start();
 
         // Handle graceful shutdown
         process.on('SIGINT', async () => {

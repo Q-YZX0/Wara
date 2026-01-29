@@ -5,7 +5,7 @@ import axios from 'axios';
 import { decryptPayload } from '../utils/encryption';
 import * as fs from 'fs';
 import * as path from 'path';
-import { CONFIG, ABIS } from '../config/config';
+import { CONFIG } from '../config/config';
 
 export const setupWalletRoutes = (node: App) => {
     const router = Router();
@@ -34,13 +34,12 @@ export const setupWalletRoutes = (node: App) => {
             const ethBal = await provider.getBalance(normalizedAddress);
 
             // WARA Balance
-            const tokenContract = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, ABIS.ERC20, provider);
-            const waraBal = await tokenContract.balanceOf(normalizedAddress);
+            const waraBal = await node.blockchain.token!.balanceOf(normalizedAddress);
 
             res.json({
                 eth: ethers.formatEther(ethBal),
                 wara: ethers.formatUnits(waraBal, 18),
-                waraAddress: CONFIG.CONTRACTS.TOKEN
+                waraAddress: node.blockchain.token!.address
             });
         } catch (e: any) {
             console.error("Balance fetch failed", e);
@@ -63,7 +62,6 @@ export const setupWalletRoutes = (node: App) => {
                 return res.status(404).json({ error: 'User not found or no wallet linked' });
             }
 
-
             const rpcUrl = CONFIG.RPC_URL;
             const provider = node.blockchain.provider;
 
@@ -72,8 +70,7 @@ export const setupWalletRoutes = (node: App) => {
 
             try {
                 ethBal = await provider.getBalance(profile.walletAddress);
-                const tokenContract = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, ABIS.ERC20, provider);
-                waraBal = await tokenContract.balanceOf(profile.walletAddress);
+                waraBal = await node.blockchain.token!.balanceOf(profile.walletAddress);
             } catch (rpcError) {
                 console.warn(`[App] Blockchain RPC Unreachable at ${rpcUrl}. Returning 0 balances.`);
             }
@@ -81,7 +78,7 @@ export const setupWalletRoutes = (node: App) => {
             res.json({
                 eth: ethers.formatEther(ethBal),
                 wara: ethers.formatUnits(waraBal, 18),
-                waraAddress: CONFIG.CONTRACTS.TOKEN,
+                waraAddress: node.blockchain.token!.address,
                 address: profile.walletAddress
             });
         } catch (e: any) {
@@ -96,8 +93,6 @@ export const setupWalletRoutes = (node: App) => {
         if (!from || !to || !amount) return res.status(400).json({ error: 'Missing fields' });
 
         try {
-            // const { getLocalUserWallet } = await import('./node'); // Removed import
-
             // 1. Get User's Wallet (Requires decryping PK with password)
             // If the user is logged in, they provide their password for this sensitive action.
             const wallet = await node.identity.getLocalUserWallet(from, password);
@@ -111,9 +106,7 @@ export const setupWalletRoutes = (node: App) => {
                     value: ethers.parseEther(amount)
                 });
             } else {
-                const tokenContract = new ethers.Contract(CONFIG.CONTRACTS.TOKEN, [
-                    "function transfer(address to, uint256 amount) returns (bool)"
-                ], signer);
+                const tokenContract = node.blockchain.token!.connect(signer) as ethers.Contract;
                 tx = await tokenContract.transfer(to, ethers.parseUnits(amount, 18));
             }
 
@@ -218,7 +211,6 @@ export const setupWalletRoutes = (node: App) => {
             if (!signer.provider) {
                 signer = signer.connect(node.blockchain.provider);
             }
-            const contract = new ethers.Contract(CONFIG.CONTRACTS.AD_MANAGER, ABIS.AD_MANAGER, signer);
 
             // 2. Scan for Proofs
             const proofsDir = path.join(CONFIG.DATA_DIR, 'proofs');
@@ -243,8 +235,6 @@ export const setupWalletRoutes = (node: App) => {
                 signatures: [] as string[],
                 filenames: [] as string[]
             };
-
-
 
             // 3. Filter & Prepare Batches
             for (const file of files) {
@@ -290,7 +280,7 @@ export const setupWalletRoutes = (node: App) => {
             // 4. Process Ad Batch
             if (adBatch.campaignIds.length > 0) {
                 console.log(`[Wallet] Claiming ${adBatch.campaignIds.length} ad rewards...`);
-                const adContract = new ethers.Contract(CONFIG.CONTRACTS.AD_MANAGER, ABIS.AD_MANAGER, signer);
+                const adContract = node.blockchain.adManager!.connect(signer) as ethers.Contract;
 
                 try {
                     const tx = await adContract.batchClaimAdView(adBatch.campaignIds, adBatch.viewers, adBatch.contentHashes, adBatch.linkIds, adBatch.signatures);
@@ -315,7 +305,7 @@ export const setupWalletRoutes = (node: App) => {
             // 5. Process Premium Batch
             if (premiumBatch.hosters.length > 0) {
                 console.log(`[Wallet] Claiming ${premiumBatch.hosters.length} premium rewards...`);
-                const subContract = new ethers.Contract(CONFIG.CONTRACTS.SUBSCRIPTIONS, ABIS.SUBSCRIPTIONS, signer);
+                const subContract = node.blockchain.subscriptions!.connect(signer) as ethers.Contract;
 
                 try {
                     const tx = await subContract.recordPremiumViewBatch(
@@ -461,7 +451,7 @@ export const setupWalletRoutes = (node: App) => {
             console.log(`[Wallet] Batch processing ${batch.linkIds.length} votes...`);
 
             // 4. Send Batch Transaction
-            const contract = new ethers.Contract(CONFIG.CONTRACTS.LINK_REGISTRY, ABIS.LINK_REGISTRY, signer);
+            const contract = node.blockchain.linkRegistry!.connect(signer) as ethers.Contract;
 
             const tx = await contract.batchVoteWithSignature(
                 batch.linkIds,

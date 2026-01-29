@@ -2,10 +2,10 @@ import { Router, Request, Response } from 'express';
 import { ethers } from 'ethers';
 import axios from 'axios';
 import { App } from '../App';
-import { getMediaMetadata } from '../utils/tmdb';
+import { MetaService } from '../services/MetaService';
 import * as path from 'path';
 import * as fs from 'fs';
-import { CONFIG, ABIS } from '../config/config';
+import { CONFIG } from '../config/config';
 
 export const setupLinkRoutes = (node: App) => {
     const router = Router();
@@ -132,7 +132,7 @@ export const setupLinkRoutes = (node: App) => {
                 console.log(`[WaraNode] Enriching new media ${sourceId} from ${source} for incoming link...`);
                 // Use isContractOwner to decide initial status
                 const statusTarget = isContractOwner ? 'approved' : 'pending_dao';
-                media = await getMediaMetadata(node.prisma, String(sourceId), mediaType || 'movie', statusTarget, node);
+                media = await MetaService.getMediaMetadata(node.prisma, String(sourceId), mediaType || 'movie', statusTarget, node);
             }
 
             if (!media) return res.status(404).json({ error: 'Media not found on Source' });
@@ -454,9 +454,27 @@ export const setupLinkRoutes = (node: App) => {
                 res.json({ success: true, relayedTo: targetUrl });
 
             } else {
-                // DOWNVOTE: Sign for multiple peers to "repartir los votos" (Rewards for whoever submits)
-                const peers = Array.from(node.p2p.knownPeers.values()).filter(p => p.walletAddress);
-                const targets = peers.sort(() => 0.5 - Math.random()).slice(0, 5); // Random 5 peers
+                // DOWNVOTE: Sign for multiple peers to "repartir los votos"
+                const allPeers = Array.from(node.p2p.knownPeers.values()).filter(p => p.walletAddress);
+
+                // 1. Select Candidates (Try 10 random peers to find 5 active ones)
+                const candidates = allPeers.sort(() => 0.5 - Math.random()).slice(0, 10);
+
+                console.log(`[Vote] Pinging ${candidates.length} candidates for relayer selection...`);
+
+                // 2. Ping Check (Parallel)
+                const livePeers = (await Promise.all(candidates.map(async (p) => {
+                    try {
+                        const res = await axios.get(`${p.endpoint}/api/network/identity`, { timeout: 2000 });
+                        if (res.status === 200 && res.data.nodeAddress) return p;
+                    } catch (e) { /* Dead Node */ }
+                    return null;
+                }))).filter(p => p !== null) as any[]; // Cast to WaraPeer[]
+
+                console.log(`[Vote] Found ${livePeers.length} active relayers.`);
+
+                // 3. Final Selection (Pick 5 from the live ones)
+                const targets = livePeers.slice(0, 5); // Already randomized by candidates sort
 
                 if (targets.length === 0) {
                     // Fallback: Sign for our own node and submit locally
@@ -599,101 +617,6 @@ export const setupLinkRoutes = (node: App) => {
         }
     });
 
-    // GET /vote/received?wallet=0x... - Get votes received by this hoster (on their links)
-    router.get('/vote/received', async (req: Request, res: Response) => {
-        try {
-            const { wallet } = req.query;
-            const signer = node.identity.getAuthenticatedSigner(req);
-            const targetWallet = (wallet as string || signer?.address || "").toLowerCase();
-
-            if (!targetWallet) return res.status(400).json({ error: 'Missing wallet or session' });
-
-            const fs = await import('fs');
-            const path = await import('path');
-            const votesDir = path.join(CONFIG.DATA_DIR, 'votes');
-            const results: any[] = [];
-
-            // 1. Try DB first (Fastest/Rich Data)
-            try {
-                const dbVotes = await node.prisma.linkVote.findMany({
-                    where: { link: { uploaderWallet: targetWallet } },
-                    include: { link: true },
-                    orderBy: { createdAt: 'desc' }
-                });
-                if (dbVotes.length > 0) return res.json({ votes: dbVotes });
-            } catch (e) { }
-
-            // 2. Fallback to Disk (Resilience if DB formatted)
-            if (fs.existsSync(votesDir)) {
-                const files = fs.readdirSync(votesDir).filter(f => f.endsWith('.json'));
-                const linkIds = new Set<string>();
-                const diskVotes: any[] = [];
-
-                for (const f of files) {
-                    try {
-                        const data = JSON.parse(fs.readFileSync(path.join(votesDir, f), 'utf8'));
-                        diskVotes.push(data);
-                        linkIds.add(data.linkId);
-                    } catch (e) { }
-                }
-
-                // We need to know which links belong to this wallet
-                const myLinks = await node.prisma.link.findMany({
-                    where: { id: { in: Array.from(linkIds) }, uploaderWallet: targetWallet },
-                    select: { id: true, title: true }
-                });
-
-                const myLinkSet = new Set(myLinks.map(l => l.id));
-                const linkMap = new Map(myLinks.map(l => [l.id, l]));
-
-                const filtered = diskVotes
-                    .filter(v => myLinkSet.has(v.linkId))
-                    .map(v => ({ ...v, link: linkMap.get(v.linkId) }));
-
-                return res.json({ votes: filtered });
-            }
-
-            res.json({ votes: [] });
-        } catch (e: any) {
-            res.status(500).json({ error: e.message });
-        }
-    });
-
-    // GET /vote/pending?wallet=0x... - Get votes I HAVE SENT that are on this node
-    router.get('/vote/pending', async (req: Request, res: Response) => {
-        try {
-            const { wallet } = req.query;
-            const signer = node.identity.getAuthenticatedSigner(req);
-            const targetWallet = (wallet as string || signer?.address || "").toLowerCase();
-
-            if (!targetWallet) return res.status(400).json({ error: 'Missing wallet or session' });
-
-            const fs = await import('fs');
-            const path = await import('path');
-            const votesDir = path.join(CONFIG.DATA_DIR, 'votes');
-            const searchVal = targetWallet;
-
-            if (!fs.existsSync(votesDir)) return res.json({ votes: [] });
-
-            const files = fs.readdirSync(votesDir).filter(f => f.endsWith('.json'));
-            const myVotes: any[] = [];
-
-            for (const f of files) {
-                try {
-                    const data = JSON.parse(fs.readFileSync(path.join(votesDir, f), 'utf8'));
-                    if (data.voter && data.voter.toLowerCase() === searchVal) {
-                        // Try to attach link title from DB if available
-                        const link = await node.prisma.link.findUnique({ where: { id: data.linkId } });
-                        myVotes.push({ ...data, link });
-                    }
-                } catch (e) { }
-            }
-
-            res.json({ votes: myVotes });
-        } catch (e: any) {
-            res.status(500).json({ error: e.message });
-        }
-    });
 
     return router;
 };

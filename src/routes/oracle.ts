@@ -1,7 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { App } from '../App';
 import { ethers } from 'ethers';
-import { CONFIG, ABIS } from '../config/config';
 
 export const setupOracleRoutes = (node: App) => {
     const router = Router();
@@ -25,13 +24,7 @@ export const setupOracleRoutes = (node: App) => {
             // }
 
             // 2. CRÍTICO: Verificar en blockchain que realmente soy juez
-            const oracle = new ethers.Contract(
-                CONFIG.CONTRACTS.ORACLE,
-                ABIS.ORACLE,
-                node.blockchain.provider
-            );
-
-            const elected = await oracle.getElectedJudges();
+            const elected = await node.blockchain.oracle!.getElectedJudges();
             const myAddress = node.identity.nodeSigner.address.toLowerCase();
             const amIReallyJudge = elected.some((j: any) =>
                 j.nodeAddress && j.nodeAddress.toLowerCase() === myAddress
