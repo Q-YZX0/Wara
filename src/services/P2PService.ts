@@ -41,12 +41,18 @@ export class P2PService {
             // 1. Catalog Sync with random peers
             const peers = Array.from(this.knownPeers.values()).sort(() => 0.5 - Math.random()).slice(0, 5);
 
+            if (peers.length === 0) {
+                console.log("[P2P] No active peers found for catalog sync. Waiting for discovery...");
+                return;
+            }
+
 
             for (const peer of peers) {
                 if (peer.name === this.identityService.nodeName) continue;
 
                 try {
-                    console.log(`[P2P] Syncing catalog with ${peer.name}...`);
+                    const peerIdentifier = peer.name || peer.endpoint || "Unknown Peer";
+                    console.log(`[P2P] Syncing catalog with ${peerIdentifier}...`);
                     const res = await axios.get(`${peer.endpoint}/api/catalog`, { timeout: 5000 });
                     if (res.status !== 200) continue;
 
@@ -193,7 +199,7 @@ export class P2PService {
 
     // for verify peer identity from registry
     public async verifyPeerIdentity(name: string, endpoint: string, signature?: string): Promise<{ address: string } | null> {
-        if (!signature || !name || !endpoint) return null;
+        if (!signature || !name || !endpoint || !this.blockchainService.isOnline) return null;
         try {
             // 1. Resolve from Registry
             let nodeAddress = ethers.ZeroAddress;
@@ -366,7 +372,7 @@ export class P2PService {
 
     // bootstrap from sentinel for discovery nodes of registry
     private async bootstrapFromSentinel() {
-        if (!this.blockchainService.nodeRegistry) return;
+        if (!this.blockchainService.isOnline || !this.blockchainService.nodeRegistry) return;
         try {
             const res = await this.blockchainService.nodeRegistry.getBootstrapNodes(20);
             const names = res[0] || res.names || [];

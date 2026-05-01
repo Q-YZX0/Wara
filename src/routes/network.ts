@@ -6,7 +6,7 @@ import { CONFIG } from '../config/config';
 export const setupNetworkRoutes = (node: App) => {
     const router = Router();
     // GET /identity (Expose technical wallet)
-    router.get('/identity', (req: Request, res: Response) => {
+    router.get('/identity', node.identity.requireAuth, (req: Request, res: Response) => {
         if (!node.identity.nodeSigner) return res.status(500).json({ error: 'Node identity not initialized' });
         res.json({
             nodeAddress: node.identity.nodeSigner.address,

@@ -165,6 +165,7 @@ export const setupNodesRoutes = (node: App) => {
             nodeOwner: node.identity.nodeOwner,
             nodeAddress: node.blockchain.wallet?.address,
             nodeBalance: nodeBalance,
+            isAuthorized: node.identity.isAuthorized(req), // New field
             sentinel: node.identity.sentinelStatus,
             config: { port: CONFIG.PORT, dataDir: CONFIG.DATA_DIR, trackers: node.p2p.trackers },
             resources: systemInfo,

@@ -25,7 +25,10 @@ export class MediaService {
     public init(prisma: any, node?: any) {
         this.prisma = prisma;
         this.node = node;
-        this.lastSyncPath = path.join(CONFIG.DATA_DIR, 'sync_state.json');
+        
+        // Use a contract-specific sync path to handle redeploys gracefully
+        const contractId = CONFIG.CONTRACTS.MEDIA_REGISTRY.slice(0, 10).toLowerCase();
+        this.lastSyncPath = path.join(CONFIG.DATA_DIR, `sync_state_${contractId}.json`);
 
         this.startSentinelCron();
         this.startGovernanceJob();
@@ -40,7 +43,7 @@ export class MediaService {
 
         this.sentinelInterval = setInterval(async () => {
             try {
-                if (!this.blockchainService.nodeRegistry || !this.identityService.nodeName) return;
+                if (!this.blockchainService.isOnline || !this.blockchainService.nodeRegistry || !this.identityService.nodeName) return;
 
                 // Update IP in Registry if changed
                 if (this.identityService.publicIp) {
@@ -149,23 +152,36 @@ export class MediaService {
         if (!this.blockchainService.mediaRegistry || this.isChainSyncing) return;
         this.isChainSyncing = true;
 
-        // Load state
+        // Load state or find deployment block
         try {
             if (fs.existsSync(this.lastSyncPath)) {
                 const state = JSON.parse(fs.readFileSync(this.lastSyncPath, 'utf8'));
                 this.lastSyncedBlock = state.lastSyncedBlock || 0;
+            } else {
+                // First time with this contract? Find its birth!
+                const foundBlock = await this.blockchainService.findDeploymentBlock(CONFIG.CONTRACTS.MEDIA_REGISTRY);
+                this.lastSyncedBlock = Math.max(0, foundBlock - 1); // Start from just before to catch deployment events
+                // Save it immediately so we don't search again if interrupted
+                fs.writeFileSync(this.lastSyncPath, JSON.stringify({ lastSyncedBlock: this.lastSyncedBlock }));
             }
         } catch (e) {
-            console.error('[Media] Governance job error:', e);
+            console.error('[Media] Sync state initialization error:', e);
         }
 
         const poll = async () => {
+            if (!this.blockchainService.isOnline) {
+                setTimeout(poll, CONFIG.TIMINGS.CHAIN_SYNC_INTERVAL);
+                return;
+            }
             try {
                 const currentBlock = await this.blockchainService.provider.getBlockNumber();
-                const fromBlock = this.lastSyncedBlock > 0 ? this.lastSyncedBlock + 1 : CONFIG.START_BLOCK || 0;
+                const fromBlock = this.lastSyncedBlock > 0 ? this.lastSyncedBlock + 1 : (CONFIG.START_BLOCK || 0);
 
-                if (fromBlock > currentBlock) return;
-                const toBlock = Math.min(currentBlock, fromBlock + 5000);
+                if (fromBlock > currentBlock) {
+                    setTimeout(poll, CONFIG.TIMINGS.CHAIN_SYNC_INTERVAL);
+                    return;
+                }
+                const toBlock = Math.min(currentBlock, fromBlock + 2000);
 
                 console.log(`[ChainSync] Polling for Media Events: ${fromBlock} -> ${toBlock}`);
                 const filter = this.blockchainService.mediaRegistry!.filters.MediaRegistered();

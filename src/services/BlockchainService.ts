@@ -7,6 +7,7 @@ export class BlockchainService {
     public provider: ethers.JsonRpcProvider;
     public wallet: ethers.Wallet | ethers.HDNodeWallet | any;
     public rpcManager: RPCManager;
+    public isOnline: boolean = false;
 
     public formatEther(wei: bigint): string {
         return ethers.formatEther(wei);
@@ -33,24 +34,26 @@ export class BlockchainService {
     constructor(private identityService: IdentityService) {
         // Initialize Provider with optimized timeout settings
         const fetchReq = new ethers.FetchRequest(CONFIG.RPC_URL);
-        fetchReq.timeout = 5000;
+        fetchReq.timeout = 15000;
         this.provider = new ethers.JsonRpcProvider(fetchReq, undefined, { staticNetwork: true });
         this.rpcManager = new RPCManager(CONFIG.RPC_URL);
+    }
 
-        // Initialize Wallet (Signer)
+    public async init() {
+        // Initialize Wallet (Signer) AFTER identity is loaded
         if (this.identityService.nodeSigner) {
             this.wallet = this.identityService.nodeSigner.connect(this.provider);
         } else {
             console.warn("[Blockchain] No Node Signer available. Read-only mode active.");
             this.wallet = ethers.Wallet.createRandom(this.provider); // Temporary fallback
         }
-    }
 
-    public async init() {
         console.log(`[Blockchain] Connecting to Chain ID ${CONFIG.CHAIN_ID}...`);
 
         try {
+            // Check network connectivity first
             const network = await this.provider.getNetwork();
+            this.isOnline = true; // Mark as online
             console.log(`[Blockchain] Connected to ${network.name} (${network.chainId})`);
 
             if (Number(network.chainId) !== Number(CONFIG.CHAIN_ID)) {
@@ -65,7 +68,7 @@ export class BlockchainService {
             this.linkRegistry = new ethers.Contract(CONFIG.CONTRACTS.LINK_REGISTRY, ABIS.LINK_REGISTRY, this.wallet);
             this.mediaRegistry = new ethers.Contract(CONFIG.CONTRACTS.MEDIA_REGISTRY, ABIS.MEDIA_REGISTRY, this.wallet);
 
-            // Optional Contracts (might be null if address is empty in config, though currently all set)
+            // Optional Contracts
             if (CONFIG.CONTRACTS.GAS_POOL) this.gasPool = new ethers.Contract(CONFIG.CONTRACTS.GAS_POOL, ["function refillGas(address recipient, uint256 amount) external"], this.wallet);
             if (CONFIG.CONTRACTS.LEADER_BOARD) this.leaderBoard = new ethers.Contract(CONFIG.CONTRACTS.LEADER_BOARD, ABIS.LEADER_BOARD, this.wallet);
             if (CONFIG.CONTRACTS.AIRDROP) this.airdrop = new ethers.Contract(CONFIG.CONTRACTS.AIRDROP, ABIS.AIRDROP, this.wallet);
@@ -75,7 +78,11 @@ export class BlockchainService {
             console.log(`[Blockchain] Contracts Initialized.`);
             await this.syncContracts();
         } catch (e: any) {
-            console.error(`[Blockchain] Initialization Failed: ${e.message} `);
+            if (e.message?.includes('401') || e.message?.includes('Unauthorized')) {
+                console.error(`[Blockchain] CRITICAL: RPC Unauthorized (401). Check Infura/Alchemy project settings.`);
+            } else {
+                console.error(`[Blockchain] Initialization Failed: ${e.message} `);
+            }
             // Do not throw, allow node to run in offline/degraded mode
         }
     }
@@ -133,7 +140,6 @@ export class BlockchainService {
             console.warn(`[Blockchain] Sync failed: ${e.message}`);
         }
     }
-
     public async getIPByAddress(address: string): Promise<string | null> {
         if (!this.nodeRegistry) return null;
         try {
@@ -144,5 +150,35 @@ export class BlockchainService {
         } catch (e) {
             return null;
         }
+    }
+
+    /**
+     * Automatically finds the block where a contract was deployed using binary search.
+     * This avoids having to manually set START_BLOCK.
+     */
+    public async findDeploymentBlock(address: string): Promise<number> {
+        console.log(`[Blockchain] Finding deployment block for ${address}...`);
+        let high = await this.provider.getBlockNumber();
+        let low = 0;
+        let deploymentBlock = high;
+
+        // Binary search for first block with code
+        while (low <= high) {
+            let mid = Math.floor((low + high) / 2);
+            try {
+                const code = await this.provider.getCode(address, mid);
+                if (code !== '0x' && code !== '0x0') {
+                    deploymentBlock = mid;
+                    high = mid - 1;
+                } else {
+                    low = mid + 1;
+                }
+            } catch (e) {
+                low = mid + 1;
+            }
+        }
+
+        console.log(`[Blockchain] ✓ Contract ${address} was deployed at block ${deploymentBlock}`);
+        return deploymentBlock;
     }
 }

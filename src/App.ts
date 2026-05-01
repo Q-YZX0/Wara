@@ -166,6 +166,12 @@ export class App {
         // 3. Initialize Services
         await this.identity.init();
         await this.blockchain.init();
+        
+        // Finalize identity with blockchain connection (recover name/domain)
+        if (this.identity.nodeSigner && (!this.identity.nodeName || !this.identity.nodeOwner)) {
+            await this.identity.syncOnChainIdentity();
+        }
+
         await this.p2p.init();
         await this.catalog.init();
         this.ads.init();

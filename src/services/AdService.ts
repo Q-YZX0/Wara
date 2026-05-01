@@ -71,7 +71,7 @@ export class AdService {
     // --- REPLICATION LOGIC ---
 
     private async pollBlockchain() {
-        if (this.isSyncing || !this.blockchainService.adManager) return;
+        if (this.isSyncing || !this.blockchainService.isOnline || !this.blockchainService.adManager) return;
         this.isSyncing = true;
 
         try {
@@ -108,7 +108,7 @@ export class AdService {
     }
 
     private async replicateExistingAds() {
-        if (!this.blockchainService.adManager) return;
+        if (!this.blockchainService.isOnline || !this.blockchainService.adManager) return;
         try {
             const nextId = await this.blockchainService.adManager.nextCampaignId();
             const total = Number(nextId);

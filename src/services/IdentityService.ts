@@ -15,6 +15,7 @@ export class IdentityService {
     public nodeOwner: string | null = null;
     public region: string = 'UNKNOWN';
     public adminKey: string = '';
+    public adminPin: string = '';
     public sentinelStatus: any = { lastCheck: 0, lastSuccess: false };
     public globalMaxStreams: number = 10;
 
@@ -74,6 +75,7 @@ export class IdentityService {
                 }
                 if (data.name) this.nodeName = data.name;
                 if (data.owner) this.nodeOwner = data.owner;
+                if (data.adminPin) this.adminPin = data.adminPin.toString();
             } catch (e) {
                 console.error("[Identity] Failed to load identity file", e);
             }
@@ -293,31 +295,108 @@ export class IdentityService {
         checkIP(); // Initial check
     }
 
+    public isAuthorized(req: any): boolean {
+        const providedKey = req.headers['x-wara-key'] || req.headers['x-admin-key'];
+        const providedPin = req.headers['x-admin-pin'];
+
+        // Use loose comparison or string cast for PIN to avoid type issues (1234 vs "1234")
+        if ((providedKey && String(providedKey) === String(this.adminKey)) || 
+            (providedPin && String(providedPin) === String(this.adminPin))) {
+            
+            // Auto-authorize the session token if provided
+            const authToken = (req.headers['x-auth-token'] || req.headers['x-wara-token'] || req.body?.authToken) as string;
+            if (authToken) {
+                this.activeWallets.set(authToken, true as any);
+            }
+            return true;
+        }
+
+        const authToken = (req.headers['x-auth-token'] || req.headers['x-wara-token'] || req.body?.authToken) as string;
+        if (authToken && (this.activeWallets.has(authToken) || this.userSessions.has(authToken))) {
+            return true;
+        }
+
+        return false;
+    }
+
     public requireAuth = (req: any, res: any, next: any) => {
         const remote = req.socket.remoteAddress;
-        const providedKey = req.headers['x-wara-key'];
+        // 2. Session Authentication (For Dashboard)
+        const isLocal = remote === '::1' || remote === '127.0.0.1' || remote === '::ffff:127.0.0.1';
+        const authToken = (req.headers['x-auth-token'] || req.headers['x-wara-token'] || req.body?.authToken) as string;
 
-        if (providedKey === this.adminKey) {
+        // 1. PIN or Key Authentication (Highest Priority)
+        const providedKey = req.headers['x-wara-key'] || req.headers['x-admin-key'];
+        const providedPin = req.headers['x-admin-pin'];
+
+        if ((providedKey && String(providedKey) === String(this.adminKey)) || 
+            (providedPin && String(providedPin) === String(this.adminPin))) {
+            // Auto-authorize the session token if provided during admin auth
+            if (authToken) {
+                this.activeWallets.set(authToken, true as any);
+            }
             return next();
         }
 
-        const isLocal = remote === '::1' || remote === '127.0.0.1' || remote === '::ffff:127.0.0.1';
+        if (authToken && (this.activeWallets.has(authToken) || this.userSessions.has(authToken))) {
+            return next();
+        }
 
+        // 3. Specialized Local Access
         if (isLocal) {
-            const authToken = (req.headers['x-auth-token'] || req.headers['x-wara-token'] || req.body.authToken) as string;
-            if (authToken && (this.activeWallets.has(authToken) || this.userSessions.has(authToken))) {
+            // Allow internal sync from Server Actions
+            if (req.headers['x-internal-sync'] === 'true') {
                 return next();
             }
 
+            // Allow status checks without auth (but response will show if authorized)
             if (req.path === '/api/manager/status' || req.originalUrl.includes('/manager/status')) {
                 return next();
             }
 
-            console.warn(`[Identity] Localhost admin attempt blocked. No active session.`);
-            return res.status(401).json({ error: 'Local Admin requires Login' });
+            console.warn(`[Identity] Localhost admin attempt blocked. No valid Session, PIN or Key provided.`);
+            return res.status(401).json({ error: 'Local Admin requires Login or PIN' });
         }
 
         console.warn(`[Identity] Blocked unauthorized admin attempt from ${remote}`);
         res.status(403).json({ error: 'Access denied. Valid Admin Key required.' });
+    }
+
+    public async syncOnChainIdentity() {
+        if (!this.provider || !this.nodeSigner) return;
+        try {
+            console.log(`[Identity] Syncing identity from Blockchain...`);
+            const nodeRegistry = new ethers.Contract(CONFIG.CONTRACTS.NODE_REGISTRY, ABIS.NODE_REGISTRY, this.provider);
+
+            // 1. Find Name Hash
+            const nameHash = await nodeRegistry.nodeAddressToNameHash(this.nodeSigner.address);
+            if (nameHash === ethers.ZeroHash) {
+                // console.log(`[Identity] Node address not registered in Registry.`);
+                return;
+            }
+
+            // 2. Fetch Node Info
+            const nodeInfo = await nodeRegistry.nodes(nameHash);
+            if (nodeInfo && nodeInfo.active) {
+                this.nodeName = nodeInfo.name;
+                this.nodeOwner = nodeInfo.operator;
+                console.log(`[Identity] ✓ Recovered On-Chain Identity: ${this.nodeName} (Owner: ${this.nodeOwner})`);
+
+                // 3. Save locally to avoid future RPC calls
+                const idPath = path.join(CONFIG.DATA_DIR, 'node_identity.json');
+                const currentData = fs.existsSync(idPath) ? JSON.parse(fs.readFileSync(idPath, 'utf8')) : {};
+                fs.writeFileSync(idPath, JSON.stringify({
+                    ...currentData,
+                    name: this.nodeName,
+                    owner: this.nodeOwner
+                }, null, 2));
+            }
+        } catch (e: any) {
+            if (e.message?.includes('401') || e.message?.includes('Unauthorized')) {
+                console.warn(`[Identity] RPC Unauthorized. Please check your Infura/Alchemy API Key.`);
+            } else {
+                console.warn(`[Identity] Failed to sync on-chain identity (RPC Busy or Offline)`);
+            }
+        }
     }
 }
