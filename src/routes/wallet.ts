@@ -242,32 +242,52 @@ export const setupWalletRoutes = (node: App) => {
                     const content = fs.readFileSync(path.join(proofsDir, file), 'utf-8');
                     const proof = JSON.parse(content);
 
-                    // Use the uploaderWallet or hoster in the JSON as a hint for filtering
                     const targetUploader = (proof.uploaderWallet || proof.hoster || "").toLowerCase();
                     if (targetUploader === signer.address.toLowerCase()) {
 
                         if (proof.type === 'premium' || proof.type === 'premium_view') {
-                            premiumBatch.hosters.push(proof.hoster || proof.uploaderWallet);
-                            premiumBatch.viewers.push(proof.viewer || proof.viewerAddress);
-                            premiumBatch.contentHashes.push(proof.contentHash || ethers.ZeroHash);
-                            premiumBatch.nonces.push(proof.nonce || 0);
-                            premiumBatch.signatures.push(proof.signature);
-                            premiumBatch.filenames.push(file);
-                        } else {
-                            // Default to Ad Proof
-                            // FIX: Validate LinkID format
-                            if (!proof.linkId || !proof.linkId.startsWith('0x') || proof.linkId.length !== 66) {
-                                console.warn(`[Wallet] Skipping ad proof with invalid LinkID format: ${file} `);
-                                continue;
-                            }
+                            // --- VERIFY PREMIUM SIGNATURE ---
+                            const isValid = await node.subscriptions.verifyPremiumSignature(
+                                proof.hoster || proof.uploaderWallet,
+                                proof.viewer || proof.viewerAddress,
+                                proof.contentHash || ethers.ZeroHash,
+                                proof.nonce || 0,
+                                proof.signature
+                            );
 
+                            if (isValid) {
+                                premiumBatch.hosters.push(proof.hoster || proof.uploaderWallet);
+                                premiumBatch.viewers.push(proof.viewer || proof.viewerAddress);
+                                premiumBatch.contentHashes.push(proof.contentHash || ethers.ZeroHash);
+                                premiumBatch.nonces.push(proof.nonce || 0);
+                                premiumBatch.signatures.push(proof.signature);
+                                premiumBatch.filenames.push(file);
+                            } else {
+                                console.warn(`[Wallet] Skipping INVALID premium signature: ${file}`);
+                            }
+                        } else {
+                            // --- VERIFY AD SIGNATURE ---
                             const hexContentHash = (proof.contentHash && proof.contentHash.startsWith('0x')) ? proof.contentHash : (proof.contentHash ? `0x${proof.contentHash}` : ethers.ZeroHash);
-                            adBatch.campaignIds.push(proof.campaignId);
-                            adBatch.viewers.push(proof.viewerAddress);
-                            adBatch.contentHashes.push(hexContentHash);
-                            adBatch.linkIds.push(proof.linkId);
-                            adBatch.signatures.push(proof.signature);
-                            adBatch.filenames.push(file);
+                            
+                            const isValid = await node.ads.verifyAdSignature(
+                                Number(proof.campaignId),
+                                proof.uploaderWallet || signer.address,
+                                proof.viewerAddress,
+                                hexContentHash,
+                                proof.linkId,
+                                proof.signature
+                            );
+
+                            if (isValid) {
+                                adBatch.campaignIds.push(Number(proof.campaignId));
+                                adBatch.viewers.push(proof.viewerAddress);
+                                adBatch.contentHashes.push(hexContentHash);
+                                adBatch.linkIds.push(proof.linkId);
+                                adBatch.signatures.push(proof.signature);
+                                adBatch.filenames.push(file);
+                            } else {
+                                console.warn(`[Wallet] Skipping INVALID ad signature: ${file}`);
+                            }
                         }
                     }
                 } catch (e) {

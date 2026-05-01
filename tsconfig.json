@@ -14,7 +14,8 @@
         "experimentalDecorators": true,
         "outDir": "./dist",
         "rootDir": "./src",
-        "baseUrl": "."
+        "baseUrl": ".",
+        "ignoreDeprecations": "6.0"
     },
     "include": [
         "src/**/*"

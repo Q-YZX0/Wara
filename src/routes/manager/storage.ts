@@ -17,7 +17,7 @@ export const setupStorageRoutes = (node: App) => {
 
     // GET /api/manager/storage/links/:id
     router.get('/storage-links/:id', node.identity.requireAuth, async (req: Request, res: Response) => {
-        const { id } = req.params;
+        const id = String(req.params.id);
         const link = node.catalog.links.get(id);
         if (!link) return res.status(404).json({ error: 'Link not found' });
         res.json({ success: true, link });
@@ -28,7 +28,7 @@ export const setupStorageRoutes = (node: App) => {
      * Delete a link and its files from the node directly.
      */
     router.delete('/storage-links/:id', node.identity.requireAuth, async (req: Request, res: Response) => {
-        const { id } = req.params;
+        const id = String(req.params.id);
         const link = node.catalog.links.get(id);
 
         if (!link) {

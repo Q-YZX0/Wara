@@ -4,18 +4,6 @@ import { CONFIG, ABIS } from '../config/config';
 import { IdentityService } from './IdentityService';
 import { BlockchainService } from './BlockchainService';
 
-const UNISWAP_ROUTER_ADDRESS = "0xC532a74256D3Db42D0Bf7a0400fEFDbad7694008"; // Sepolia
-const WETH_ADDRESS = "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9";
-const CHAINLINK_ETH_USD = "0x694AA1769357215DE4FAC081bf1f309aDC325306"; // Sepolia
-
-const UNISWAP_ABI = [
-    "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"
-];
-
-const CHAINLINK_FEED_ABI = [
-    "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)"
-];
-
 interface JudgeAssignment {
     cycleId: number;
     rank: number;
@@ -193,8 +181,8 @@ export class OracleService {
 
     public async getMarketPrice(): Promise<number> {
         try {
-            const router = new ethers.Contract(UNISWAP_ROUTER_ADDRESS, UNISWAP_ABI, this.blockchainService.provider);
-            const ethFeed = new ethers.Contract(CHAINLINK_ETH_USD, CHAINLINK_FEED_ABI, this.blockchainService.provider);
+            const router = new ethers.Contract(CONFIG.CONTRACTS.UNISWAP_ROUTER, ABIS.UNISWAP, this.blockchainService.provider);
+            const ethFeed = new ethers.Contract(CONFIG.CONTRACTS.CHAINLINK_FEED, ABIS.CHAINLINK_FEED, this.blockchainService.provider);
 
             // 1. Get ETH/USD from Chainlink
             // @ts-ignore
@@ -203,7 +191,7 @@ export class OracleService {
 
             // 2. Get WARA/ETH from Uniswap
             const amountIn = ethers.parseUnits("1", 18);
-            const path = [CONFIG.CONTRACTS.TOKEN, WETH_ADDRESS];
+            const path = [CONFIG.CONTRACTS.TOKEN, CONFIG.CONTRACTS.WETH];
 
             // @ts-ignore
             const amounts = await router.getAmountsOut(amountIn, path);

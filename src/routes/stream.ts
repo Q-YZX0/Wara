@@ -130,44 +130,72 @@ export const setupStreamRoutes = (node: App) => {
         }
     });
     //GET /stream/:id/map
-    router.get('/:id/map', (req: Request, res: Response) => {
-        const link = node.catalog.getLink(req.params.id);
-        if (!link) return res.status(404).json({ error: 'Link not found' });
+    router.get('/:id/map', async (req: Request, res: Response) => {
+        const linkId = String(req.params.id);
+        const localLink = node.catalog.getLink(linkId);
+        let linkData: any = null;
+        let isLocal = false;
 
-        const effectiveHost = node.identity.publicIp ? node.identity.publicIp : (req.headers.host?.split(':')[0] || 'localhost');
+        if (localLink) {
+            linkData = {
+                id: localLink.id,
+                hosterAddress: localLink.map.hosterAddress,
+                filePath: localLink.filePath,
+                map: localLink.map,
+                key: localLink.key,
+                activeStreams: localLink.activeStreams
+            };
+            isLocal = true;
+        } else {
+            // @ts-ignore
+            const dbLink = await node.prisma.link.findUnique({ where: { id: linkId } });
+            if (!dbLink) return res.status(404).json({ error: 'Link not found' });
+            linkData = {
+                id: dbLink.id,
+                hosterAddress: dbLink.uploaderWallet,
+                url: dbLink.url,
+                map: dbLink.waraMetadata ? JSON.parse(dbLink.waraMetadata as string) : {},
+                activeStreams: 0
+            };
+        }
+
+        // Resolve IP
+        let effectiveHost = node.identity.publicIp || 'localhost';
+        if (!isLocal) {
+            const targetWallet = linkData.hosterAddress || (linkData.url?.startsWith('0x') ? linkData.url : null);
+            if (targetWallet) {
+                const resolvedIp = (await node.blockchain.getIPByAddress(targetWallet)) || node.p2p.getIPByWallet(targetWallet);
+                if (resolvedIp) effectiveHost = resolvedIp;
+                else if (linkData.url && !linkData.url.startsWith('0x')) effectiveHost = linkData.url;
+            } else if (linkData.url) effectiveHost = linkData.url;
+        }
+        effectiveHost = effectiveHost.split(':')[0];
+
         const isSystemBusy = node.catalog.isSystemOverloaded();
-        const isFull = link.activeStreams >= node.catalog.globalMaxStreams;
-        const reportedActive = isSystemBusy ? node.catalog.globalMaxStreams : link.activeStreams;
+        const isFull = (linkData.activeStreams || 0) >= node.catalog.globalMaxStreams;
+        const reportedActive = isSystemBusy ? node.catalog.globalMaxStreams : (linkData.activeStreams || 0);
 
-        const sessionKey = `${req.ip}_${link.id}`;
+        const sessionKey = `${req.ip}_${linkData.id}`;
         const expiry = node.identity.activeSessions.get(sessionKey);
+        const isLocalViewer = (req.ip === '::1' || req.ip === '127.0.0.1' || req.ip === '::ffff:127.0.0.1');
+        const adRequired = (isLocal || isLocalViewer) ? false : (!expiry || expiry < Date.now());
 
-        // Bypass check
-        const viewerParam = req.query.viewer as string;
-        const isHoster = viewerParam && link.map.hosterAddress &&
-            viewerParam.toLowerCase() === link.map.hosterAddress.toLowerCase();
-        const isLocal = (req.ip === '::1' || req.ip === '127.0.0.1' || req.ip === '::ffff:127.0.0.1');
-
-        const adRequired = (isLocal || isHoster) ? false : (!expiry || expiry < Date.now());
-
-        const liveMap: WaraMap & { adRequired: boolean, key?: string } = {
-            ...link.map,
+        res.json({
+            ...linkData.map,
             status: (isFull || isSystemBusy) ? 'busy' : 'online',
-            publicEndpoint: `http://${effectiveHost}:${CONFIG.PORT}/stream/${link.id}`,
-            adRequired: adRequired,
-            key: link.key, // EXPOSE KEY IN MAP FOR RECOVERY
+            publicEndpoint: `http://${effectiveHost}:${CONFIG.PORT}/stream/${linkData.id}`,
+            adRequired,
+            key: linkData.key,
             stats: {
                 activeStreams: reportedActive,
                 maxStreams: node.catalog.globalMaxStreams
             }
-        };
-
-        res.json(liveMap);
+        });
     });
 
     //GET /stream/:id/stream
     router.get('/:id/stream', (req: Request, res: Response) => {
-        const link = node.catalog.getLink(req.params.id);
+        const link = node.catalog.getLink(String(req.params.id));
         if (!link) return res.status(404).json({ error: 'Link not found' });
 
         if (node.catalog.isSystemOverloaded() || link.activeStreams >= node.catalog.globalMaxStreams) {
@@ -237,7 +265,7 @@ export const setupStreamRoutes = (node: App) => {
 
         // Standard Encrypted Stream (for Service Worker)
         const fileSize = stat.size;
-        const range = req.headers.range;
+        const range = String(req.headers.range || '');
 
         if (range) {
             const parts = range.replace(/bytes=/, "").split("-");
@@ -275,7 +303,8 @@ export const setupStreamRoutes = (node: App) => {
 
     //GET /stream/:id/subtitle/:lang
     router.get('/:id/subtitle/:lang', (req: Request, res: Response) => {
-        const { id, lang } = req.params;
+        const id = String(req.params.id);
+        const lang = String(req.params.lang);
         // Simple validation
         if (!/^[a-z0-9]+$/i.test(id) || !/^[a-z]+$/i.test(lang)) return res.status(400).end();
 
@@ -313,7 +342,8 @@ export const setupStreamRoutes = (node: App) => {
             const s = season ? parseInt(season as string) : 0;
             const e = episode ? parseInt(episode as string) : 0;
 
-            const itemWaraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
+            const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+            const itemWaraId = ethers.keccak256(abiCoder.encode(["string", "string"], [String(source), String(sourceId)]));
 
             const progress = await node.prisma.playbackProgress.findUnique({
                 where: {
@@ -340,7 +370,8 @@ export const setupStreamRoutes = (node: App) => {
             const s = season ? parseInt(season) : 0;
             const e = episode ? parseInt(episode) : 0;
 
-            const itemWaraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
+            const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+            const itemWaraId = ethers.keccak256(abiCoder.encode(["string", "string"], [String(source), String(sourceId)]));
 
             await node.prisma.playbackProgress.upsert({
                 where: {
@@ -484,9 +515,11 @@ export const setupStreamRoutes = (node: App) => {
 
             // 2. Verify Signature matching Subscriptions.sol:
             // keccak256(abi.encodePacked(hoster, viewer, contentHash, nonce, block.chainid))
+            const network = await node.blockchain.provider.getNetwork();
+            const chainId = Number(network.chainId);
             const messageHash = ethers.solidityPackedKeccak256(
                 ["address", "address", "bytes32", "uint256", "uint256"],
-                [officialHoster, wallet, hexContentHash, nonce, CONFIG.CHAIN_ID || 1] // Default to 1 if not set
+                [officialHoster, wallet, hexContentHash, nonce, chainId]
             );
 
             const recovered = ethers.verifyMessage(ethers.getBytes(messageHash), signature);

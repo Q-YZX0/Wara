@@ -42,5 +42,35 @@ export const setupLeaderboardRoutes = (node: App) => {
         }
     });
 
+    // GET /api/leaderboard/users - Top Ranked Users
+    router.get('/users', async (req, res) => {
+        try {
+            const users = await node.prisma.user.findMany({
+                where: { walletAddress: { not: null } },
+                select: { id: true, email: true, walletAddress: true, pendingRewards: true }
+            });
+
+            // If we need real ERC20 balances, we can query node.blockchain.provider here
+            // For now, we simulate WARA balance with pendingRewards or simple mapping
+            const leaderboard = users.map(u => {
+                const simulatedRep = (u.pendingRewards || 0) * 10 + 100;
+                return {
+                    name: u.walletAddress ? `${u.walletAddress.slice(0, 6)}...` : 'Anonymous',
+                    address: u.walletAddress!,
+                    reputation: simulatedRep,
+                    // Simple placeholder, real WARA balance can be fetched via contract if added to BlockchainService
+                    balance: simulatedRep 
+                };
+            });
+
+            leaderboard.sort((a, b) => b.balance - a.balance);
+
+            res.json({ users: leaderboard });
+        } catch (e) {
+            console.error("Leaderboard Users Error:", e);
+            res.status(500).json({ error: "Failed to fetch users leaderboard" });
+        }
+    });
+
     return router;
 };

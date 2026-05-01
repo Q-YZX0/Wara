@@ -79,16 +79,19 @@ export const setupOracleRoutes = (node: App) => {
 
             // 2. Firmar el precio
             const priceInOracleFormat = BigInt(Math.round(price * 1e8));
+            const network = await node.blockchain.provider.getNetwork();
+            const chainId = network.chainId;
+
             const messageHash = ethers.solidityPackedKeccak256(
                 ["int256", "uint256", "uint256"],
-                [priceInOracleFormat, timestamp, 11155111] // Sepolia chainId
+                [priceInOracleFormat, timestamp, chainId]
             );
 
             const signature = await node.identity.nodeSigner.signMessage(
                 ethers.getBytes(messageHash)
             );
 
-            console.log(`[Oracle] ✓ Firmado precio $${price.toFixed(4)} para ciclo ${cycleId}`);
+            console.log(`[Oracle] ✓ Firmado precio $${price.toFixed(4)} para ciclo ${cycleId} (Chain: ${chainId})`);
 
             res.json({
                 signature,

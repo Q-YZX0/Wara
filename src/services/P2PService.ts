@@ -244,7 +244,7 @@ export class P2PService {
                     await axios.post(`${target.endpoint}/api/network/gossip`, myPayload);
                 } catch (e) { }
             }
-        }, 60000);
+        }, CONFIG.TIMINGS.PEER_GOSSIP_INTERVAL); 
     }
 
     private async buildGossipPayload(allPeers: WaraPeer[]) {
@@ -417,6 +417,19 @@ export class P2PService {
         }
     }
 
+    public getIPByWallet(walletAddress: string): string | null {
+        const address = walletAddress.toLowerCase();
+        if (address === this.identityService.nodeSigner?.address.toLowerCase()) {
+            return this.identityService.publicIp || 'localhost';
+        }
+        for (const peer of this.knownPeers.values()) {
+            if (peer.walletAddress?.toLowerCase() === address) {
+                return peer.endpoint.replace('http://', '').split(':')[0];
+            }
+        }
+        return null;
+    }
+
     //--------END SENTINEL SERVICE--------
 
     public async init() {
@@ -429,6 +442,9 @@ export class P2PService {
         // Start Background Jobs
         this.startTrackerbeat();
         this.startGossip();
+        
+        // Periodic Network Sync (Frequency controlled via config)
+        setInterval(() => this.syncNetwork(), CONFIG.TIMINGS.CHAIN_SYNC_INTERVAL);
 
         console.log(`[P2P] Initialized with ${this.knownPeers.size} peers and ${this.trackers.length} trackers.`);
     }

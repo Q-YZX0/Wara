@@ -304,8 +304,50 @@ export class AdService {
         if (!this.identityService.nodeSigner) {
             throw new Error("Node does not have a signer configured");
         }
-        const message = `AdView:${campaignId}:${viewerAddress}:${contentHash}:${linkId}`;
-        return await this.identityService.nodeSigner.signMessage(message);
+
+        // 1. Resolve uploaderWallet (The node itself is the hoster/uploader of the service)
+        const uploaderWallet = this.identityService.nodeSigner.address;
+        const chainId = Number((await this.blockchainService.provider.getNetwork()).chainId);
+        const contractAddress = CONFIG.CONTRACTS.AD_MANAGER;
+
+        // 2. Normalize hashes
+        const hexContentHash = contentHash.startsWith('0x') ? contentHash : `0x${contentHash}`;
+        const hexLinkId = linkId.startsWith('0x') ? linkId : `0x${linkId}`;
+
+        // 3. Reconstruct message hash (MATCHES AdManager.sol:192)
+        // abi.encodePacked(campaignId, uploaderWallet, viewer, contentHash, linkId, block.chainid, address(this))
+        const messageHash = ethers.solidityPackedKeccak256(
+            ["uint256", "address", "address", "bytes32", "bytes32", "uint256", "address"],
+            [campaignId, uploaderWallet, viewerAddress, hexContentHash, hexLinkId, chainId, contractAddress]
+        );
+
+        return await this.identityService.nodeSigner.signMessage(ethers.getBytes(messageHash));
+    }
+
+    public async verifyAdSignature(
+        campaignId: number,
+        uploaderWallet: string,
+        viewerAddress: string,
+        contentHash: string,
+        linkId: string,
+        signature: string
+    ): Promise<boolean> {
+        try {
+            const chainId = Number((await this.blockchainService.provider.getNetwork()).chainId);
+            const contractAddress = CONFIG.CONTRACTS.AD_MANAGER;
+            const hexContentHash = contentHash.startsWith('0x') ? contentHash : `0x${contentHash}`;
+            const hexLinkId = linkId.startsWith('0x') ? linkId : `0x${linkId}`;
+
+            const messageHash = ethers.solidityPackedKeccak256(
+                ["uint256", "address", "address", "bytes32", "bytes32", "uint256", "address"],
+                [campaignId, uploaderWallet, viewerAddress, hexContentHash, hexLinkId, chainId, contractAddress]
+            );
+
+            const recovered = ethers.verifyMessage(ethers.getBytes(messageHash), signature);
+            return recovered.toLowerCase() === viewerAddress.toLowerCase();
+        } catch (e) {
+            return false;
+        }
     }
 
     public async submitClaim(

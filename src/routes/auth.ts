@@ -1,18 +1,31 @@
 import { Router, Request, Response } from 'express';
 import { App } from '../App';
 import { ethers } from 'ethers';
-import { decryptPayload, verifyPassword, decryptPrivateKey, encryptPayload } from '../utils/encryption';
+import { 
+    decryptPayload, 
+    verifyPassword, 
+    decryptPrivateKey, 
+    encryptPayload, 
+    hashPassword, 
+    encryptPrivateKey 
+} from '../utils/encryption';
 import { randomUUID } from 'crypto';
+import { CONFIG } from '../config/config';
 
 export const setupAuthRoutes = (node: App) => {
     const router = Router();
+
+    // Helper to get token consistently
+    const getAuthToken = (req: Request) => {
+        return (req.headers['x-auth-token'] || req.headers['x-wara-token'] || req.body.authToken) as string;
+    };
+
     // POST /api/auth/register
     router.post('/register', async (req: Request, res: Response) => {
         const { username, password, privateKey } = req.body;
         if (!username || !password) return res.status(400).json({ error: 'Missing credentials' });
 
         try {
-            const { hashPassword, encryptPrivateKey } = await import('../utils/encryption');
             const existing = await node.prisma.localProfile.findUnique({ where: { username } });
             if (existing) return res.status(400).json({ error: 'Username taken' });
 
@@ -30,14 +43,14 @@ export const setupAuthRoutes = (node: App) => {
             const existingWallet = await node.prisma.localProfile.findFirst({ where: { walletAddress: wallet.address } });
             if (existingWallet) return res.status(400).json({ error: 'This wallet is already registered to another user' });
 
-            const encryptedPrivateKey = encryptPrivateKey(wallet.privateKey, password);
-            const passwordHash = hashPassword(password);
+            const encKey = encryptPrivateKey(wallet.privateKey, password);
+            const passHash = hashPassword(password);
 
             const profile = await node.prisma.localProfile.create({
                 data: {
                     username,
-                    passwordHash,
-                    encryptedPrivateKey,
+                    passwordHash: passHash,
+                    encryptedPrivateKey: encKey,
                     walletAddress: wallet.address
                 }
             });
@@ -54,22 +67,18 @@ export const setupAuthRoutes = (node: App) => {
         const { username, password } = req.body;
         if (!username || !password) return res.status(400).json({ error: 'Missing credentials' });
         try {
-            const { verifyPassword, decryptPrivateKey } = await import('../utils/encryption');
-
-            const profile = await node.prisma.localProfile.findUnique({ where: { username } }); // Public prisma
+            const profile = await node.prisma.localProfile.findUnique({ where: { username } });
             if (!profile || !verifyPassword(password, profile.passwordHash)) {
                 return res.status(401).json({ error: 'Invalid credentials' });
             }
 
-            // Generate Session Token
             const authToken = randomUUID();
-            node.identity.userSessions.set(authToken, profile.username); // Public userSessions
+            node.identity.userSessions.set(authToken, profile.username);
 
-            // Unlock Wallet for Session
             try {
                 const decryptedKey = decryptPrivateKey(profile.encryptedPrivateKey, password);
                 const sessionWallet = new ethers.Wallet(decryptedKey, node.blockchain.provider);
-                node.identity.activeWallets.set(authToken, sessionWallet); // Public activeWallets
+                node.identity.activeWallets.set(authToken, sessionWallet);
                 console.log(`[Auth] Wallet unlocked for session ${authToken.substring(0, 8)}...`);
             } catch (err) {
                 console.error("Failed to unlock wallet for session");
@@ -87,34 +96,36 @@ export const setupAuthRoutes = (node: App) => {
         }
     });
 
-    // POST /api/auth/sign-ad-proof (Local Signing for Ads with Hashing)
+    // POST /api/auth/sign-ad-proof
     router.post('/sign-ad-proof', async (req: Request, res: Response) => {
-        const { authToken, campaignId, viewer, contentHash, linkId } = req.body;
-        if (!authToken || !campaignId || !viewer || !contentHash || !linkId) {
+        const { campaignId, viewer, contentHash, linkId, uploader } = req.body;
+        const authToken = getAuthToken(req);
+
+        if (!authToken || !campaignId || !viewer || !contentHash || !linkId || !uploader) {
             return res.status(400).json({ error: 'Missing ad proof data' });
         }
 
-        // 1. Verify Session
-        const username = node.identity.userSessions.get(authToken);
-        if (!username) return res.status(401).json({ error: 'Invalid session' });
-
-        // 2. Get Unlocked Wallet
         const wallet = node.identity.activeWallets.get(authToken);
-        if (!wallet) return res.status(401).json({ error: 'Wallet locked. Re-login required.' });
+        if (!wallet) return res.status(401).json({ error: 'Wallet locked or invalid session' });
 
         try {
-            // 3. Construct Hash (Solidity Compatible)
-            const onChainLinkId = ethers.id(linkId); // Keccak256 of string
+            const onChainLinkId = linkId.startsWith('0x') ? linkId : ethers.id(linkId);
             const ch = contentHash.startsWith('0x') ? contentHash : `0x${contentHash}`;
-
-            // REMOVED 'uploader' from hash to avoid frontend/backend synchronization issues on ownership
+            const network = await node.blockchain.provider.getNetwork();
+            
             const messageHash = ethers.solidityPackedKeccak256(
-                ["uint256", "address", "bytes32", "bytes32"],
-                [campaignId, viewer, ch, onChainLinkId]
+                ["uint256", "address", "address", "bytes32", "bytes32", "uint256", "address"],
+                [
+                    BigInt(campaignId), 
+                    uploader, 
+                    wallet.address,
+                    ch, 
+                    onChainLinkId, 
+                    network.chainId, 
+                    CONFIG.CONTRACTS.AD_MANAGER
+                ]
             );
 
-            // 4. Sign the BINARY hash
-            // ethers.verifyMessage(ethers.getBytes(hash), sig) works if we sign bytes.
             const signature = await wallet.signMessage(ethers.getBytes(messageHash));
 
             res.json({
@@ -130,11 +141,9 @@ export const setupAuthRoutes = (node: App) => {
 
     // GET /api/auth/session
     router.get('/session', node.identity.requireAuth, async (req: Request, res: Response) => {
-        // If we reach here, requireAuth middleware has already validated the session
-        // and attached user and wallet to req.
-        const username = (req as any).user.username;
-        const walletAddress = (req as any).user.walletAddress;
-        const authToken = req.headers['x-auth-token'] as string;
+        const username = (req as any).user?.username;
+        const walletAddress = (req as any).user?.walletAddress;
+        const authToken = getAuthToken(req);
 
         res.json({
             success: true,
@@ -246,7 +255,7 @@ export const setupAuthRoutes = (node: App) => {
             // Let's UPDATE req.body to include username or require session auth middleware?
             // Let's Require Session Auth via Header 'x-auth-token'
 
-            const authToken = req.headers['x-auth-token'] as string;
+            const authToken = getAuthToken(req);
             let username = node.identity.userSessions.get(authToken);
 
             // If no session, try to infer from password? No.

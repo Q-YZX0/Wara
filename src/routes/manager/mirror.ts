@@ -6,7 +6,7 @@ import * as path from 'path';
 import { CONFIG } from '../../config/config';
 import { WaraMap } from '../../types';
 import { ethers } from 'ethers';
-import { getMediaMetadata } from '../../utils/tmdb';
+import { MetaService } from '../../services/MetaService';
 
 export const setupMirrorRoutes = (node: App) => {
     const router = Router();
@@ -47,7 +47,7 @@ export const setupMirrorRoutes = (node: App) => {
                 const sourceId = map.mediaInfo.sourceId || map.mediaInfo.tmdbId;
 
                 if (sourceId) {
-                    media = await getMediaMetadata(node.prisma, String(sourceId), map.mediaInfo.type || 'movie', 'pending_dao', node);
+                    media = await MetaService.getMediaMetadata(node.prisma, String(sourceId), map.mediaInfo.type || 'movie', 'pending_dao', node);
                 }
             }
 

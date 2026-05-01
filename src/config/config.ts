@@ -25,7 +25,12 @@ export const CONFIG = {
         AIRDROP: "0x958aedd2fE387a369AD208bF00F7e5AE19F37AEb",
         DAO: "0xFbF631CB68f88cCDb730f02A2Fb4752634F1CB3f",
         VESTING: "0x7B5BeED0a933870E9A5fC6DbD28035944B4bBb1e",
-        ORACLE: "0xc54a85FbFa70a440BDC3E75fdDD3cfF1DaA57DCC"
+        ORACLE: "0xc54a85FbFa70a440BDC3E75fdDD3cfF1DaA57DCC",
+        
+        // External Infrastructure (Default: Sepolia)
+        UNISWAP_ROUTER: process.env.UNISWAP_ROUTER || "0xC532a74256D3Db42D0Bf7a0400fEFDbad7694008",
+        WETH: process.env.WETH || "0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9",
+        CHAINLINK_FEED: process.env.CHAINLINK_FEED || "0x694AA1769357215DE4FAC081bf1f309aDC325306"
     },
 
     // Discovery
@@ -35,7 +40,15 @@ export const CONFIG = {
     SKIP_UPNP: process.env.SKIP_UPNP === 'true',
     LOCAL_ONLY: process.env.LOCAL_ONLY === 'true',
     SKIP_BENCHMARK: process.env.SKIP_BENCHMARK === 'true',
-    START_BLOCK: Number(process.env.START_BLOCK) || 6400000 // A reasonable default for Sepolia
+    START_BLOCK: Number(process.env.START_BLOCK) || 6400000, // A reasonable default for Sepolia
+
+    // Network & Sync Timing (User adjustable to save RPC costs)
+    TIMINGS: {
+        CHAIN_SYNC_INTERVAL: Number(process.env.CHAIN_SYNC_INTERVAL) || 15 * 60 * 1000, // Default 15 mins
+        SENTINEL_INTERVAL: Number(process.env.SENTINEL_INTERVAL) || 10 * 60 * 1000,    // Default 10 mins
+        GOVERNANCE_INTERVAL: Number(process.env.GOVERNANCE_INTERVAL) || 60 * 60 * 1000, // Default 1 hour
+        PEER_GOSSIP_INTERVAL: Number(process.env.PEER_GOSSIP_INTERVAL) || 5 * 1000,     // Default 5 seconds
+    }
 };
 
 // ABIs moved from contracts.ts 
@@ -48,6 +61,8 @@ export const ABIS = {
         "function updateIP(string newIP) external",
         "function getBootstrapNodes(uint256 limit) external view returns (string[] names, string[] ips)",
         "function getActiveNodeCount() external view returns (uint256)",
+        "function nodeAddressToNameHash(address node) external view returns (bytes32)",
+        "function nodes(bytes32 hash) external view returns (string name, address operator, address nodeAddress, uint256 registeredAt, uint256 expiresAt, bool active, string currentIP, uint256 lastIPUpdate, bool hasQualityRPC)",
         "event NodeRegistered(string name, address indexed operator, address indexed nodeAddress, uint256 expiresAt)",
         "event IPUpdated(string indexed name, string newIP)"
     ],
@@ -137,9 +152,17 @@ export const ABIS = {
     ],
     ORACLE: [
         "function submitPrice(int256 _price, uint256 _timestamp, bytes[] calldata _signatures) external",
+        "function getElectedJudges() external view returns (tuple(address nodeAddress, string name, string ip, uint256 rank)[10])",
+        "function getElectedJury() external view returns (address[] juryAddresses, string[] juryIPs, string[] juryNames)",
         "function latestAnswer() external view returns (int256)",
         "function latestTimestamp() external view returns (uint256)",
         "function decimals() external view returns (uint8)",
         "function owner() external view returns (address)"
+    ],
+    UNISWAP: [
+        "function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts)"
+    ],
+    CHAINLINK_FEED: [
+        "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)"
     ]
 };

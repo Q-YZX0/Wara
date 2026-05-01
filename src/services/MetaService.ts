@@ -39,7 +39,10 @@ export class MetaService {
         if (!process.env.TMDB_API_KEY && !node && source === 'tmdb') return null;
 
         try {
-            const waraId = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
+            // MATCHES MediaRegistry.sol:58 -> keccak256(abi.encode(_source, _externalId))
+            const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+            const encoded = abiCoder.encode(["string", "string"], [String(source), String(sourceId)]);
+            const waraId = ethers.keccak256(encoded);
 
             // 1. Check existing to prevent redundant fetches
             const existing = await prisma.media.findUnique({ where: { waraId } });

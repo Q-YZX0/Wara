@@ -54,7 +54,7 @@ export class BlockchainService {
             console.log(`[Blockchain] Connected to ${network.name} (${network.chainId})`);
 
             if (Number(network.chainId) !== Number(CONFIG.CHAIN_ID)) {
-                console.warn(`[Blockchain] WARNING: Configured ChainID(${CONFIG.CHAIN_ID}) matches Network(${network.chainId}) ? `);
+                console.warn(`[Blockchain] WARNING: Configured ChainID(${CONFIG.CHAIN_ID}) DOES NOT match Network(${network.chainId})`);
             }
 
             // Initialize Contracts
@@ -73,7 +73,7 @@ export class BlockchainService {
             if (CONFIG.CONTRACTS.ORACLE) this.oracle = new ethers.Contract(CONFIG.CONTRACTS.ORACLE, ABIS.ORACLE, this.wallet);
 
             console.log(`[Blockchain] Contracts Initialized.`);
-
+            await this.syncContracts();
         } catch (e: any) {
             console.error(`[Blockchain] Initialization Failed: ${e.message} `);
             // Do not throw, allow node to run in offline/degraded mode
@@ -85,5 +85,64 @@ export class BlockchainService {
      */
     public verifySignature(message: string, signature: string): string {
         return ethers.verifyMessage(message, signature);
+    }
+
+    public async syncContracts() {
+        console.log(`[Blockchain] Performing Initial Contract Sync...`);
+        try {
+            // 1. Verify NodeRegistry deployment
+            const code = await this.provider.getCode(CONFIG.CONTRACTS.NODE_REGISTRY);
+            if (code === '0x' || code === '0x0') {
+                console.warn(`[Blockchain] ⚠️ CRITICAL: NodeRegistry not found at ${CONFIG.CONTRACTS.NODE_REGISTRY}`);
+                return;
+            }
+
+            // 2. Fetch Node Balance (WARA Token)
+            if (this.token && this.identityService.nodeSigner) {
+                const balance = await this.token.balanceOf(this.identityService.nodeSigner.address);
+                console.log(`[Blockchain] Node Balance: ${ethers.formatUnits(balance, 18)} WARA`);
+            }
+
+            // 3. Check Node Name Hash
+            if (this.identityService.nodeName && this.nodeRegistry) {
+                const cleanName = this.identityService.nodeName.replace('.wara', '');
+                const onChainNode = await this.nodeRegistry.getNode(cleanName);
+                if (onChainNode.active) {
+                    console.log(`[Blockchain] ✓ Node Registry Status: ACTIVE (${cleanName}.wara)`);
+                } else {
+                    console.log(`[Blockchain] ⚠ Node Registry Status: NOT REGISTERED (${cleanName}.wara)`);
+                }
+            }
+
+            // 4. Verify Critical Registries
+            const mediaCode = await this.provider.getCode(CONFIG.CONTRACTS.MEDIA_REGISTRY);
+            if (mediaCode !== '0x' && mediaCode !== '0x0') {
+                console.log(`[Blockchain] ✓ Media Registry: ONLINE`);
+            } else {
+                console.warn(`[Blockchain] ⚠️ Media Registry NOT FOUND at ${CONFIG.CONTRACTS.MEDIA_REGISTRY}`);
+            }
+
+            const adCode = await this.provider.getCode(CONFIG.CONTRACTS.AD_MANAGER);
+            if (adCode !== '0x' && adCode !== '0x0') {
+                console.log(`[Blockchain] ✓ Ad Manager: ONLINE`);
+            } else {
+                console.warn(`[Blockchain] ⚠️ Ad Manager NOT FOUND at ${CONFIG.CONTRACTS.AD_MANAGER}`);
+            }
+
+        } catch (e: any) {
+            console.warn(`[Blockchain] Sync failed: ${e.message}`);
+        }
+    }
+
+    public async getIPByAddress(address: string): Promise<string | null> {
+        if (!this.nodeRegistry) return null;
+        try {
+            const nameHash = await this.nodeRegistry.nodeAddressToNameHash(address);
+            if (nameHash === ethers.ZeroHash) return null;
+            const nodeInfo = await this.nodeRegistry.nodes(nameHash);
+            return nodeInfo.currentIP || nodeInfo[6] || null;
+        } catch (e) {
+            return null;
+        }
     }
 }

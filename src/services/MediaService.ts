@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { ethers } from 'ethers';
+import axios from 'axios';
 import { CONFIG, ABIS } from '../config/config';
 import { BlockchainService } from './BlockchainService';
 import { IdentityService } from './IdentityService';
@@ -56,10 +57,42 @@ export class MediaService {
                         console.log(`[Sentinel] IP Updated: ${tx.hash}`);
                     }
                 }
+
+                // --- 2. ORACLE SENTINEL AUDIT (Notify Judges) ---
+                if (this.blockchainService.oracle) {
+                    try {
+                        // @ts-ignore
+                        const juryData = await this.blockchainService.oracle.getElectedJury();
+                        const juryAddresses = juryData[0] || juryData.juryAddresses;
+                        const juryIPs = juryData[1] || juryData.juryIPs;
+                        
+                        if (juryAddresses && juryAddresses.length > 0) {
+                            const cycleId = Math.floor(Date.now() / (24 * 60 * 60 * 1000));
+                            const startTime = Date.now() + 60000; // Inicia consenso en 1 minuto
+                            
+                            for (let i = 0; i < juryAddresses.length; i++) {
+                                const jurorIP = juryIPs[i];
+                                if (!jurorIP) continue;
+                                const endpoint = jurorIP.startsWith('http') ? jurorIP : `http://${jurorIP}`;
+                                
+                                // Petición asíncrona "fire-and-forget"
+                                axios.post(`${endpoint}/api/oracle/notify`, {
+                                    cycleId,
+                                    yourRank: i,
+                                    judges: juryAddresses,
+                                    startTime,
+                                    signature: 'sentinel_sig'
+                                }, { timeout: 3000 }).catch(() => {});
+                            }
+                        }
+                    } catch(e: any) {
+                        console.warn("[Sentinel] Oracle notification failed:", e.message);
+                    }
+                }
             } catch (e) {
                 console.warn("[Sentinel] Cron check failed", e);
             }
-        }, 10 * 60 * 1000); // 10 minutes
+        }, CONFIG.TIMINGS.SENTINEL_INTERVAL); 
     }
 
     /**
@@ -109,7 +142,7 @@ export class MediaService {
             } catch (e) {
                 console.error('[Media] Governance local update error:', e);
             }
-        }, 60 * 60 * 1000); // 1 hour
+        }, CONFIG.TIMINGS.GOVERNANCE_INTERVAL); 
     }
 
     public async syncMediaFromChain() {
@@ -271,7 +304,7 @@ export class MediaService {
                                     sourceId: media.sourceId,
                                     mediaType: media.type,
                                     title: media.title,
-                                    url: hoster.toLowerCase(),
+                                    url: hoster.toLowerCase(), // This will be updated below if IP is found
                                     uploaderWallet: hoster.toLowerCase(),
                                     waraMetadata: JSON.stringify({
                                         hash: contentHash,
@@ -294,10 +327,33 @@ export class MediaService {
             }
         };
 
-        // Every 6 hours as per original design
-        setInterval(poll, 6 * 60 * 60 * 1000);
+        // Frequency controlled by user in config.ts
+        setInterval(poll, CONFIG.TIMINGS.CHAIN_SYNC_INTERVAL);
         poll();
         this.isChainSyncing = false;
+    }
+
+    /**
+     * Attempts to resolve a wallet address to a public IP using the NodeRegistry
+     * Note: This assumes the hoster is a registered Wara node.
+     */
+    private async resolveNodeIp(address: string): Promise<string | null> {
+        try {
+            // Since we only have the address, and getNode() needs a name, 
+            // we could iterate nodes or use a mapping if the contract had it.
+            // For now, we'll try to find if this node is already in our P2P peer list
+            const peer = this.node?.p2p?.peers?.get(address.toLowerCase());
+            if (peer && peer.ip) return peer.ip;
+
+            // Fallback: Check if it's our own address
+            if (address.toLowerCase() === this.identityService.nodeSigner?.address.toLowerCase()) {
+                return this.identityService.publicIp || '127.0.0.1';
+            }
+
+            return null;
+        } catch (e) {
+            return null;
+        }
     }
 
     public stop() {

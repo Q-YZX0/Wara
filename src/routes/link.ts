@@ -268,7 +268,8 @@ export const setupLinkRoutes = (node: App) => {
                     }
                 }
 
-                const tx = await (node.blockchain.linkRegistry! as any).registerLink(contentHash, media.waraId, salt, finalUploaderWallet);
+                const linkRegistryWithSigner = node.blockchain.linkRegistry!.connect(signer) as any;
+                const tx = await linkRegistryWithSigner.registerLink(contentHash, media.waraId, salt, signer.address);
                 txHash = tx.hash;
             } catch (err: any) {
                 console.error("[Web3] Auto-Registration Failed:", err.message);
@@ -313,8 +314,9 @@ export const setupLinkRoutes = (node: App) => {
             // Compute Media Hash if needed
             let finalMediaHash = ethers.ZeroHash;
             if (sourceId) {
-                // Standardize IDs
-                finalMediaHash = ethers.solidityPackedKeccak256(["string", "string"], [String(source), `:${String(sourceId)}`]);
+                // MATCHES MediaRegistry.sol:58
+                const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+                finalMediaHash = ethers.keccak256(abiCoder.encode(["string", "string"], [String(source), String(sourceId)]));
             }
 
             // Check for required params
@@ -335,9 +337,10 @@ export const setupLinkRoutes = (node: App) => {
                     }
                 }
 
-                // Media Hash (from stored Source ID)
+                // Media Hash (MATCHES MediaRegistry.sol:58)
                 if (localLink.sourceId) {
-                    finalMediaHash = ethers.solidityPackedKeccak256(["string", "string"], [localLink.source, `:${localLink.sourceId}`]);
+                    const abiCoder = ethers.AbiCoder.defaultAbiCoder();
+                    finalMediaHash = ethers.keccak256(abiCoder.encode(["string", "string"], [localLink.source, localLink.sourceId]));
                 }
 
                 const finalSalt = salt || meta.salt || localLink.title || "default-salt";
@@ -353,8 +356,8 @@ export const setupLinkRoutes = (node: App) => {
 
             async function performRegistration(mHash: string, cHash: string, s: string, hoster: string) {
                 if (!signer) return res.status(401).json({ error: 'Signer disappeared' });
-                const tx = await (node.blockchain.linkRegistry!.connect(signer) as any).registerLink(cHash, mHash, s, hoster);
-
+                const linkRegistryWithSigner = node.blockchain.linkRegistry!.connect(signer) as any;
+                const tx = await linkRegistryWithSigner.registerLink(cHash, mHash, s, signer.address);
                 return res.json({ success: true, txHash: tx.hash });
             }
 
@@ -426,9 +429,12 @@ export const setupLinkRoutes = (node: App) => {
             if (voteValue === 1) {
                 // UPVOTE: Sign for Hoster and relay once (The hoster picks it up)
                 const relayer = hosterAddress;
+                const network = await node.blockchain.provider.getNetwork();
+                const chainId = Number(network.chainId);
+
                 const messageHash = ethers.solidityPackedKeccak256(
                     ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
-                    [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, Number((await node.blockchain.provider.getNetwork()).chainId), CONFIG.CONTRACTS.LINK_REGISTRY]
+                    [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, chainId, CONFIG.CONTRACTS.LINK_REGISTRY]
                 );
                 const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
@@ -479,9 +485,11 @@ export const setupLinkRoutes = (node: App) => {
                 if (targets.length === 0) {
                     // Fallback: Sign for our own node and submit locally
                     const relayer = node.identity.nodeSigner?.address || ethers.ZeroAddress;
+                    const network = await node.blockchain.provider.getNetwork();
+                    const chainId = Number(network.chainId);
                     const messageHash = ethers.solidityPackedKeccak256(
                         ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
-                        [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, Number((await node.blockchain.provider.getNetwork()).chainId), CONFIG.CONTRACTS.LINK_REGISTRY]
+                        [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, chainId, CONFIG.CONTRACTS.LINK_REGISTRY]
                     );
                     const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
@@ -493,11 +501,14 @@ export const setupLinkRoutes = (node: App) => {
                 } else {
                     console.log(`[Vote] Signing downvote for ${targets.length} peers...`);
 
+                    const network = await node.blockchain.provider.getNetwork();
+                    const chainId = Number(network.chainId);
+
                     const relays = await Promise.allSettled(targets.map(async (peer) => {
                         const relayer = peer.walletAddress;
                         const messageHash = ethers.solidityPackedKeccak256(
                             ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
-                            [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, Number((await node.blockchain.provider.getNetwork()).chainId), CONFIG.CONTRACTS.LINK_REGISTRY]
+                            [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, chainId, CONFIG.CONTRACTS.LINK_REGISTRY]
                         );
                         const signature = await userSigner.signMessage(ethers.getBytes(messageHash));
 
@@ -537,9 +548,11 @@ export const setupLinkRoutes = (node: App) => {
                 )
             );
 
+            const network = await node.blockchain.provider.getNetwork();
+            const chainId = Number(network.chainId);
             const messageHash = ethers.solidityPackedKeccak256(
                 ["bytes32", "bytes32", "int8", "address", "address", "uint256", "uint256", "uint256", "address"],
-                [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, Number((await node.blockchain.provider.getNetwork()).chainId), CONFIG.CONTRACTS.LINK_REGISTRY]
+                [onChainLinkId, hexContentHash, voteValue, voter, relayer, nonce, timestamp, chainId, CONFIG.CONTRACTS.LINK_REGISTRY]
             );
             const recoveredAddress = ethers.verifyMessage(ethers.getBytes(messageHash), signature);
 

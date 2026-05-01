@@ -309,7 +309,7 @@ export class IdentityService {
                 return next();
             }
 
-            if (req.path === '/api/admin/status' || req.originalUrl.includes('/admin/status')) {
+            if (req.path === '/api/manager/status' || req.originalUrl.includes('/manager/status')) {
                 return next();
             }
 

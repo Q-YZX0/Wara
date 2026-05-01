@@ -14,7 +14,7 @@ export const setupMediaRoutes = (node: App) => {
     // GET /api/media/stream/:waraId
     // This allows other nodes to sync rich metadata (overview, posters) without TMDB
     router.get('/stream/:waraId', async (req: Request, res: Response) => {
-        const { waraId } = req.params;
+        const waraId = String(req.params.waraId);
         if (!/^[a-z0-9_-]+$/i.test(waraId)) return res.status(400).end();
 
         try {
@@ -36,7 +36,7 @@ export const setupMediaRoutes = (node: App) => {
             if (!sourceId) return res.status(400).json({ error: "Missing sourceId" });
 
             // 0. Strict Identity Check (Must be an active USER session)
-            const authToken = (req.headers['x-auth-token'] || req.body.authToken) as string;
+            const authToken = String(req.headers['x-auth-token'] || req.body.authToken || '');
             const signer = node.identity.activeWallets.get(authToken);
             if (!signer) return res.status(401).json({ error: "Unauthorized: Active USER session required" });
 
@@ -197,7 +197,7 @@ export const setupMediaRoutes = (node: App) => {
     // GET /api/media/status/:waraId
     router.get('/status/:waraId', async (req: Request, res: Response) => {
         try {
-            const { waraId } = req.params;
+            const waraId = String(req.params.waraId);
 
             // 1. Get Local Media (For metadata)
             const media = await node.prisma.media.findUnique({ where: { waraId } });
@@ -328,7 +328,7 @@ export const setupMediaRoutes = (node: App) => {
     router.post('/resolve', async (req: Request, res: Response) => {
         try {
             const { source, sourceId, title } = req.body;
-            const authToken = req.headers['x-auth-token'] as string;
+            const authToken = String(req.headers['x-auth-token'] || '');
             if (!authToken) return res.status(401).json({ error: "Auth required" });
 
             const wallet = node.identity.activeWallets.get(authToken);

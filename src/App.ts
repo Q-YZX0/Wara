@@ -1,6 +1,7 @@
 import express, { Router } from 'express';
 import cors from 'cors';
 import { PrismaClient } from '@prisma/client';
+import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { CONFIG } from './config/config';
 import { IdentityService } from './services/IdentityService';
 import { BlockchainService } from './services/BlockchainService';
@@ -9,9 +10,10 @@ import { CatalogService } from './services/CatalogService';
 import { StreamService } from './services/StreamService';
 import { AdService } from './services/AdService';
 import { OracleService } from './services/OracleService';
+import { SubscriptionService } from './services/SubscriptionService';
+import { MediaService } from './services/MediaService';
 
 // Route imports (to be refactored)
-import { MediaService } from './services/MediaService';
 import { setupAuthRoutes } from './routes/auth';
 import { setupNetworkRoutes } from './routes/network';
 import { setupCatalogRoutes } from './routes/catalog';
@@ -48,6 +50,7 @@ export class App {
     public ads: AdService;
     public oracle: OracleService;
     public media: MediaService;
+    public subscriptions: SubscriptionService;
 
     // --- LEGACY BRIDGE (Compatibility for WaraNode interface) ---
     get nodeId() { return this.identity.nodeSigner?.address || 'unknown'; }
@@ -75,13 +78,9 @@ export class App {
     get knownPeers() { return (this.p2p as any).knownPeers; }
 
     // Middleware
-    public requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-        const authHeader = req.headers['authorization'] || req.headers['x-admin-key'];
-        if (authHeader === this.adminKey) {
-            return next();
-        }
-        res.status(401).json({ error: 'Admin authentication required' });
-    };
+    public get requireAuth() {
+        return this.identity.requireAuth;
+    }
 
     // Proxy Methods
     public registerLink(id: string, path: string, map: any, key?: string) {
@@ -135,7 +134,13 @@ export class App {
 
     constructor() {
         this.app = express();
-        this.prisma = new PrismaClient();
+        
+        // Prisma 7 Adapter Initialization
+        const databaseUrl = process.env.DATABASE_URL || 'file:./dev.db';
+        const adapter = new PrismaBetterSqlite3({
+            url: databaseUrl
+        });
+        this.prisma = new PrismaClient({ adapter } as any);
 
         // 1. Instantiate Services (Order of dependency)
         this.identity = new IdentityService();
@@ -146,6 +151,7 @@ export class App {
         this.ads = new AdService(this.blockchain, this.identity, this.p2p, this.catalog);
         this.oracle = new OracleService(this.identity, this.blockchain);
         this.media = new MediaService(this.blockchain, this.identity);
+        this.subscriptions = new SubscriptionService(this.blockchain, this.identity);
     }
 
     public async init() {

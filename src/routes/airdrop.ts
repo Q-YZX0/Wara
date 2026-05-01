@@ -83,6 +83,10 @@ export const setupAirdropRoutes = (node: App) => {
                                 console.log(`[Airdrop] Found Auto-Proof for ${userSigner.address}`);
                                 merkleProof = claimData.proof;
                                 amount = claimData.amount;
+                                // If cycleId is not provided in body, infer it from the file
+                                if (!cycleId && data.cycleId) {
+                                    cycleId = data.cycleId;
+                                }
                             }
                         } catch (e) { }
                     }

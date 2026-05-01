@@ -143,7 +143,7 @@ export const setupRegistryRoutes = (node: App) => {
     // Check if a .wara name exists
     router.get('/name-exists/:name', async (req: Request, res: Response) => {
         try {
-            const name = req.params.name.replace('.wara', '');
+            const name = String(req.params.name).replace('.wara', '');
             const exists = await node.blockchain.nodeRegistry!.nameExists(name);
             res.json({ exists });
         } catch (e) {
@@ -155,7 +155,7 @@ export const setupRegistryRoutes = (node: App) => {
     // Get info for any registered node
     router.get('/node-info/:name', async (req: Request, res: Response) => {
         try {
-            const name = req.params.name.replace('.wara', '');
+            const name = String(req.params.name).replace('.wara', '');
             const info = await node.blockchain.nodeRegistry!.getNode(name);
             // info: [operator, nodeAddress, expiresAt, active]
             res.json({

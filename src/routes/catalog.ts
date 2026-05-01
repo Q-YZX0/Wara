@@ -85,7 +85,7 @@ export const setupCatalogRoutes = (node: App) => {
 
     // --- Image Serving Endpoints (P2P Metadata) ---
     router.get('/poster/:sourceId', (req: Request, res: Response) => {
-        const { sourceId } = req.params;
+        const sourceId = String(req.params.sourceId);
         if (!/^[a-z0-9_-]+$/i.test(sourceId)) return res.status(400).end();
 
         const posterPath = path.join(CONFIG.DATA_DIR, 'posters', `${sourceId}.jpg`);
@@ -98,7 +98,7 @@ export const setupCatalogRoutes = (node: App) => {
     });
 
     router.get('/backdrop/:sourceId', (req: Request, res: Response) => {
-        const { sourceId } = req.params;
+        const sourceId = String(req.params.sourceId);
         if (!/^[a-z0-9_-]+$/i.test(sourceId)) return res.status(400).end();
 
         const backdropPath = path.join(CONFIG.DATA_DIR, 'backdrops', `${sourceId}.jpg`);
@@ -112,7 +112,9 @@ export const setupCatalogRoutes = (node: App) => {
 
     //Al parecer no se utiliza verificar para que sirve    
     router.get('/episode-still/:sourceId/:season/:episode', (req: Request, res: Response) => {
-        const { sourceId, season, episode } = req.params;
+        const sourceId = String(req.params.sourceId);
+        const season = String(req.params.season);
+        const episode = String(req.params.episode);
         if (!/^[a-z0-9_-]+$/i.test(sourceId) || !/^\d+$/.test(season) || !/^\d+$/.test(episode)) {
             return res.status(400).end();
         }
@@ -347,7 +349,7 @@ export const setupCatalogRoutes = (node: App) => {
         const finalSourceId = sourceId || mediaId; // In case mediaId was used as sourceId
 
         // 0. Strict Identity Check (Must be an active USER session)
-        const authToken = (req.headers['x-auth-token'] || req.body.authToken) as string;
+        const authToken = String(req.headers['x-auth-token'] || req.body.authToken || '');
         const signer = node.identity.activeWallets.get(authToken);
         if (!signer) return res.status(401).json({ error: "Unauthorized: Active USER session required" });
 
@@ -413,12 +415,12 @@ export const setupCatalogRoutes = (node: App) => {
 
     router.get('/meta/:id', async (req: Request, res: Response) => {
         const type = (req.query.type as string) || 'movie';
-        const data = await MetaService.getMediaMetadata(node.prisma, req.params.id, type, 'approved', node);
+        const data = await MetaService.getMediaMetadata(node.prisma, String(req.params.id), type, 'approved', node);
         res.json(data || {});
     });
 
     router.get('/meta/:id/season/:season', async (req: Request, res: Response) => {
-        const data = await MetaService.getSeasonDetails(req.params.id, Number(req.params.season));
+        const data = await MetaService.getSeasonDetails(String(req.params.id), Number(req.params.season));
         res.json(data || {});
     });
 
