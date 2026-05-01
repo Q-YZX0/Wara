@@ -1,6 +1,6 @@
 {
     "name": "wara-node",
-    "version": "0.1.2",
+    "version": "0.1.4",
     "description": "Wara Links Library",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",

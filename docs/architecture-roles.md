@@ -8,8 +8,8 @@ In Wara, we separate **ownership** from **operation** to maximize security.
 
 | Identity | Description | Location | Purpose |
 | :--- | :--- | :--- | :--- |
-| **Operator / Owner** (User Signer) | The user's secure identity wallet. | Encrypted Vault (`wara_store/`). | Pays fees, owns the node registration, and receives rewards ($WARA). |
-| **Tech Wallet** (Node Signer) | The node's technical wallet. | `wara_store/` (In-Memory). | Signs IP updates, signs price feed jury votes, and receives gas refunds (ETH). |
+| **Hoster / Owner** (User Signer) | The user's secure identity wallet. | Encrypted Vault (`data/`). | **The Boss.** Pays gas for link registrations, owns content on-chain, and receives ad rewards directly. |
+| **Tech Wallet** (Node Signer) | The node's technical wallet. | `data/` (In-Memory). | **The Worker.** Signs IP updates (Sentinel), oracle price votes, and handles automated system tasks. |
 | **Admin Key** | A secret 64-char string. | `admin_key.secret` | Authorizes remote control of the node via the Dashboard. |
 
 ---

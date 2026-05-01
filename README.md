@@ -34,28 +34,40 @@
 
 Deep dive into the architecture, economy, and internal logic of Wara:
 
--   **[Ecosystem Roles & Identity](docs/architecture-roles.md)**: Node vs. User wallets, Admin keys, and Security modes.
+-   **[Ecosystem Roles & Identity](docs/architecture-roles.md)**: Node vs. User wallets, Admin keys, and Hoster responsibilities.
+-   **[Architecture: Rewards & Signers](../ARCHITECTURE_REWARDS.md)**: Detailed breakdown of who signs what and who gets paid.
+-   **[Roadmap: Road to Production](../ROAD_TO_PRODUCTION.md)**: Strategy for moving from development to a secure Mainnet launch.
 -   **[Registration & Sentinel System](docs/registration-sentinel.md)**: Blockchain registration, 10/90 fee split, and gas refills.
 -   **[Economy & Governance](docs/economy-governance.md)**: Gasless operations, Reward systems, and DAO content approval.
--   **[RPC Infrastructure](docs/rpc-independence.md)**: How to host your own Ethereum node and move away from centralized providers.
 
 ---
 
-## 🚀 Quick Start (Linux/macOS)
+---
 
-The easiest way to set up a WaraNode is using our interactive deployment script:
+## 🚀 Quick Start
 
-```bash
-cd wara
-chmod +x setup.sh
-./setup.sh
-```
+### Windows
+1. Open PowerShell in the `Wara` folder.
+2. Run the setup script:
+   ```powershell
+   ./setup.ps1
+   ```
+3. Start the node:
+   ```powershell
+   npm start
+   ```
 
-The script will guide you through:
-1.  **Security Mode**: Choosing between Local or Remote administration.
-2.  **Network Setup**: Port configuration (Default: 21746).
-3.  **Blockchain Connection**: Setting up your RPC (Sepolia recommended).
-4.  **Metadata Integration**: Adding an optional TMDB API key.
+### Linux/macOS
+1. Open terminal in the `Wara` folder.
+2. Run the setup script:
+   ```bash
+   chmod +x setup.sh
+   ./setup.sh
+   ```
+3. Start the node:
+   ```bash
+   npm start
+   ```
 
 ---
 
@@ -74,13 +86,15 @@ The script will guide you through:
 
 ## 📂 Directory Structure
 
-All node data is stored in the `wara_store/` directory:
+All node data is stored in the `Wara/data/` directory (configurable via `DATA_DIR`):
 - `/permanent`: Activated, verified media content.
 - `/temp`: Incoming uploads awaiting verification/sealing.
 - `/ads`: Locally replicated ad assets.
+- `/airdrops`: JSON proof files for claim processing.
 - `/posters`: Cached P2P metadata images.
 - `peers.json`: Local discovery database.
 - `sync_state.json`: Blockchain event tracking.
+- `Wara/prisma/dev.db`: SQLite database file.
 
 ---
 
